@@ -1,0 +1,42 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Build backend, UI and Windows executables
+        run: ./scripts/build-windows.ps1
+        shell: pwsh
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: AutoBrowser ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          body: |
+            ## Download (Windows 10/11, 64-bit)
+            - **AutoBrowser Setup …exe**: installer (Start menu + desktop shortcut)
+            - **AutoBrowser-…-portable.exe**: single file, no install needed
+
+            The executables are not code-signed yet, so Windows SmartScreen may warn on first launch: click **More info → Run anyway**.
+
+            Exact replays need nothing else. For "Build with AI", AI steps and AI assist, add an Anthropic API key in Settings.
+          files: |
+            desktop/release/*.exe

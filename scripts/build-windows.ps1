@@ -3,6 +3,7 @@
 #   desktop\release\AutoBrowser-<ver>-portable.exe (single portable exe)
 # Requirements: Python 3.11+ and Node.js 20+ on PATH.
 $ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true  # fail on non-zero exit codes (pwsh 7.4+)
 $root = Split-Path -Parent $PSScriptRoot
 
 Write-Host "==> Backend (FastAPI -> autobrowser-backend.exe)"
