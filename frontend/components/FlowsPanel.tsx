@@ -7,6 +7,7 @@ import type { Flow, RunMode } from '@/lib/types';
 import { hostPath } from '@/lib/steps';
 import { StepCard } from './StepCard';
 import { BuildWithAI } from './BuildWithAI';
+import { FlowDataCard } from './FlowDataCard';
 import type { AppCtx } from './Shell';
 
 const MODES: { id: RunMode; label: string; hint: string }[] = [
@@ -142,6 +143,8 @@ export function FlowsPanel({ ctx, onClose, onEdit }: { ctx: AppCtx; onClose: () 
           </div>
         </div>
 
+        <FlowDataCard ctx={ctx} flow={flow} onSaved={() => {}} />
+
         <div className="card">
           <div className="row">
             <Sparkles size={16} color="var(--accent)" />
@@ -171,7 +174,7 @@ export function FlowsPanel({ ctx, onClose, onEdit }: { ctx: AppCtx; onClose: () 
             </div>
           )}
         </div>
-        {shown.map((s, i) => <StepCard key={s.id || i} step={s} index={i} readOnly />)}
+        {shown.map((s, i) => <StepCard key={s.id || i} step={s} index={i} readOnly rowStart={!!flow.data && (flow.data.start_step_id ? s.id === flow.data.start_step_id : i === 0)} />)}
       </div>
     </>
   );

@@ -2,19 +2,24 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, ArrowRight, Bot, Circle, Cog, History, Home, Lock, Plus, RotateCw, Square, UserRound, Workflow, X, Loader2, Search,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { bridge } from '@/lib/bridge';
 import { get } from '@/lib/api';
-import type { Flow, Profile, RunLog, Settings, Step, TabInfo } from '@/lib/types';
-import { shouldAddGoto, uid } from '@/lib/steps';
+import type { Dataset, Flow, Profile, RunLog, RunProgress, Settings, Step, TabInfo } from '@/lib/types';
+import { matchColumn, shouldAddGoto, uid } from '@/lib/steps';
 import { StartPage } from './StartPage';
 import { RecorderPanel } from './RecorderPanel';
 import { FlowsPanel } from './FlowsPanel';
 import { AccountsPanel } from './AccountsPanel';
 import { RunsPanel } from './RunsPanel';
 import { SettingsPanel } from './SettingsPanel';
+import { DataPanel } from './DataPanel';
 
-export type PanelId = 'recorder' | 'flows' | 'accounts' | 'runs' | 'settings' | null;
+export type PanelId = 'recorder' | 'flows' | 'accounts' | 'data' | 'runs' | 'settings' | null;
+
+/** Data attached while recording: typed values equal to a cell of `row` become {{row.<column>}}. */
+export type RecData = { dataset: Dataset; rowIndex: number } | null;
 
 export type AppCtx = {
   profiles: Profile[];
@@ -48,6 +53,10 @@ export default function Shell() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [logs, setLogs] = useState<RunLog[]>([]);
   const [running, setRunning] = useState<Record<string, string>>({});
+  const [progress, setProgress] = useState<Record<string, RunProgress>>({});
+  const [recData, setRecData] = useState<RecData>(null);
+  const recRowRef = useRef<Record<string, unknown> | null>(null);
+  recRowRef.current = recData ? recData.dataset.rows[recData.rowIndex] || null : null;
   const [toastMsg, setToastMsg] = useState<{ msg: string; error?: boolean } | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
   const frameRef = useRef<HTMLDivElement>(null);
@@ -93,12 +102,19 @@ export default function Shell() {
       }),
       b.on('rec:step', (step: Step & { type: string; message?: string }) => {
         if ((step as any).type === 'notice') { toast((step as any).message); return; }
-        setSteps((cur) => [...cur, { ...step, id: uid(), tip: '' }]);
+        const s: Step = { ...step, id: uid(), tip: '' };
+        // typed a value from the data row you are recording with? -> make it {{row.<column>}}
+        const tpl = (s.type === 'type' || s.type === 'select') && !s.secret
+          ? matchColumn(s.value, recRowRef.current) || (s.type === 'select' ? matchColumn(s.label, recRowRef.current) : null)
+          : null;
+        if (tpl) { s.sample = s.value; s.value = tpl; }
+        setSteps((cur) => [...cur, s]);
       }),
       b.on('rec:navigated', ({ url, ts }) => {
         setSteps((cur) => (shouldAddGoto(cur, url, ts) ? [...cur, { id: uid(), type: 'goto', url, ts }] : cur));
       }),
       b.on('run:log', (l: RunLog) => setLogs((cur) => [...cur.slice(-800), l])),
+      b.on('run:progress', (p: RunProgress) => setProgress((cur) => ({ ...cur, [p.runId]: p }))),
       b.on('run:status', ({ runId, status }) => {
         setRunning((cur) => ({ ...cur, [runId]: status }));
         if (status === 'success') toast('Run finished ✓');
@@ -221,6 +237,7 @@ export default function Shell() {
             <RailBtn id="recorder" icon={<Circle size={20} />} tip="Recorder" badge={steps.length || undefined} />
             <RailBtn id="flows" icon={<Workflow size={20} />} tip="Saved flows" />
             <RailBtn id="accounts" icon={<UserRound size={20} />} tip="Accounts & logins" />
+            <RailBtn id="data" icon={<FileSpreadsheet size={20} />} tip="Data (Excel, CSV, PDF)" />
           </div>
           <div className="railgroup glass dock">
             <RailBtn id="runs" icon={runningCount ? <Loader2 size={20} className="spin" /> : <History size={20} />} tip="Runs & results" badge={runningCount || undefined} />
@@ -245,14 +262,16 @@ export default function Shell() {
           <aside className="panel glass">
             {panel === 'recorder' && (
               <RecorderPanel ctx={ctx} rec={rec} steps={steps} setSteps={setSteps}
-                editingFlow={editingFlow} setEditingFlow={setEditingFlow} onClose={() => setPanel(null)} />
+                editingFlow={editingFlow} setEditingFlow={setEditingFlow} onClose={() => setPanel(null)}
+                recData={recData} setRecData={setRecData} />
             )}
             {panel === 'flows' && (
               <FlowsPanel key={focusFlowId || 'flows'} ctx={ctx} onClose={() => setPanel(null)}
                 onEdit={(f) => { setEditingFlow(f); setSteps(f.steps); setPanel('recorder'); }} />
             )}
             {panel === 'accounts' && <AccountsPanel ctx={ctx} onClose={() => setPanel(null)} />}
-            {panel === 'runs' && <RunsPanel ctx={ctx} logs={logs} running={running} onClose={() => setPanel(null)} />}
+            {panel === 'data' && <DataPanel ctx={ctx} onClose={() => setPanel(null)} />}
+            {panel === 'runs' && <RunsPanel ctx={ctx} logs={logs} running={running} progress={progress} onClose={() => setPanel(null)} />}
             {panel === 'settings' && <SettingsPanel ctx={ctx} onClose={() => setPanel(null)} />}
           </aside>
         )}

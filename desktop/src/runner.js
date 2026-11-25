@@ -29,13 +29,57 @@ function frameCall(frame, cmd, args = {}, timeout = 15000) {
 
 class StopError extends Error {}
 
+// Looks up "row.Case ID" or "row.extra.City"; keys may contain spaces or dots.
+function lookup(obj, path) {
+  const parts = path.split('.');
+  let cur = obj;
+  let i = 0;
+  while (i < parts.length) {
+    if (cur == null || typeof cur !== 'object') return undefined;
+    let found = false;
+    for (let j = parts.length; j > i; j--) {
+      const k = parts.slice(i, j).join('.');
+      if (Object.prototype.hasOwnProperty.call(cur, k)) { cur = cur[k]; i = j; found = true; break; }
+    }
+    if (!found) return undefined;
+  }
+  return cur;
+}
+
 function render(str, vars) {
   if (typeof str !== 'string') return str;
-  return str.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (m, key) => {
-    if (key === 'row') return m; // scope marker, handled by the page engine
-    const v = key.split('.').reduce((o, k) => (o == null ? undefined : o[k]), vars);
-    return v == null ? '' : String(v);
+  return str.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (m, key) => {
+    if (key === 'row' && (vars.row == null || typeof vars.row === 'object')) return m; // scope marker for row loops
+    const v = lookup(vars, key);
+    return v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
   });
+}
+
+const TRUTHY = new Set(['1', 'true', 'yes', 'y', 'x', '✓', '✔', 'on', 'checked', 'oui', 'si', 'sí', 'ja', 'نعم', 'vrai']);
+const truthy = (v) => TRUTHY.has(String(v ?? '').trim().toLowerCase());
+
+function flattenRow(row, prefix = '') {
+  const out = {};
+  for (const [k, v] of Object.entries(row || {})) {
+    if (v && typeof v === 'object' && !Array.isArray(v)) Object.assign(out, flattenRow(v, `${prefix}${k}.`));
+    else out[`${prefix}${k}`] = v;
+  }
+  return out;
+}
+
+function rowCondition(row, cond) {
+  const s = String(lookup(row || {}, cond.row) ?? '').trim();
+  const want = String(cond.value ?? '').trim().toLowerCase();
+  switch (cond.op || 'not_empty') {
+    case 'empty': return s === '';
+    case 'not_empty': return s !== '';
+    case 'equals': return s.toLowerCase() === want;
+    case 'not_equals': return s.toLowerCase() !== want;
+    case 'contains': return s.toLowerCase().includes(want);
+    case 'truthy': return truthy(s);
+    case 'falsy': return !truthy(s);
+    default: return true;
+  }
 }
 
 function builtinVars() {
@@ -121,7 +165,8 @@ class Runner {
       if (flow.start_url && !(first && first.type === 'goto')) {
         await this.goto(ctx, flow.start_url);
       }
-      await this.execSteps(ctx, steps);
+      if (flow.data && flow.data.dataset_id) await this.runRows(ctx, flow, steps, run.id);
+      else await this.execSteps(ctx, steps);
       log('info', 'Finished ✓');
     } catch (e) {
       status = e instanceof StopError ? 'stopped' : 'failed';
@@ -136,6 +181,53 @@ class Runner {
   }
 
   checkStop(ctx) { if (ctx.state.stopped) throw new StopError('Stopped by user'); }
+
+  // Data-driven run: steps before `start_step_id` run once (login…), the rest once per row.
+  async runRows(ctx, flow, steps, runId) {
+    const cfg = flow.data;
+    const { rows, total } = await this.deps.api('GET', `/flows/${flow.id}/data-rows`);
+    let start = cfg.start_step_id ? steps.findIndex((s) => s.id === cfg.start_step_id) : 0;
+    if (start < 0) { ctx.log('warn', 'The "repeat from here" step was not found; repeating the whole flow for each row'); start = 0; }
+    const once = steps.slice(0, start);
+    const each = steps.slice(start);
+    ctx.log('info', `Data: ${rows.length} row${rows.length === 1 ? '' : 's'} to process${total !== rows.length ? ` (of ${total} matching)` : ''}`);
+    if (once.length) await this.execSteps(ctx, once);
+    let ok = 0;
+    let failed = 0;
+    const progress = (done) => this.deps.emit('run:progress', { runId, flowId: flow.id, profileId: ctx.profileId, done, total: rows.length, ok, failed });
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const num = row._row ?? i + 1;
+      progress(i);
+      ctx.vars.row = row;
+      ctx.vars.index = i;
+      ctx.rowResult = {};
+      let status = 'success';
+      let message = '';
+      ctx.log('info', `Row ${num} (${i + 1}/${rows.length})`);
+      try {
+        this.checkStop(ctx);
+        await this.execSteps(ctx, each);
+        ok++;
+      } catch (e) {
+        status = e instanceof StopError ? 'stopped' : 'failed';
+        message = e.message || String(e);
+        if (status === 'failed') { failed++; ctx.log('error', `Row ${num} failed: ${message}`); }
+        if (e instanceof StopError || cfg.stop_on_error) {
+          ctx.output('_rows', [{ ...flattenRow(row), _row: num, _status: status, _message: message, ...ctx.rowResult }]);
+          ctx.rowResult = null;
+          progress(i + 1);
+          if (e instanceof StopError) throw e;
+          throw new Error(`Stopped at row ${num} (stop on first error is on)`);
+        }
+      }
+      ctx.output('_rows', [{ ...flattenRow(row), _row: num, _status: status, _message: message, ...ctx.rowResult }]);
+      ctx.rowResult = null;
+    }
+    progress(rows.length);
+    ctx.log(failed ? 'warn' : 'info', `Rows done: ${ok} succeeded, ${failed} failed`);
+    if (failed && !ok) throw new Error('Every row failed');
+  }
 
   async execSteps(ctx, steps) {
     for (const step of steps) {
@@ -260,6 +352,7 @@ class Runner {
 
   async conditionTrue(ctx, cond) {
     if (!cond) return true;
+    if (cond.row) return rowCondition(ctx.vars.row, cond);
     const frame = ctx.wc.mainFrame;
     if (cond.exists) {
       const has = await frameCall(frame, 'exists', typeof cond.exists === 'string' ? { selector: render(cond.exists, ctx.vars) } : { target: cond.exists, scope: ctx.scope });
@@ -313,6 +406,21 @@ class Runner {
         return this.settle(ctx, 150);
       }
 
+      case 'check': {
+        const want = truthy(v(step.value ?? 'true'));
+        const box = await this.locate(ctx, step);
+        if (!box) throw new Error(`checkbox not found: ${step.target?.label || step.target?.selectors?.[0]?.value || ''}`);
+        const before = await frameCall(box.frame, 'checkState', { target: step.target, scope: ctx.scope });
+        const name = step.target?.label || step.target?.text || 'checkbox';
+        if (before && before.checked === want) { ctx.log('info', `${name} already ${want ? 'on' : 'off'}`, step.id); return; }
+        if (before && before.radio && !want) { ctx.log('info', `${name}: radio left as is`, step.id); return; }
+        ctx.log('info', `${want ? 'Tick' : 'Untick'} ${name}`, step.id);
+        await this.clickBox(ctx, box);
+        const after = await frameCall(box.frame, 'checkState', { target: step.target, scope: ctx.scope }).catch(() => null);
+        if (after && after.found && after.checked !== null && after.checked !== want) throw new Error(`${name} did not change`);
+        return;
+      }
+
       case 'press':
         ctx.log('info', `Press ${step.key}`, step.id);
         await this.human.key(ctx.wc, step.key || 'Enter');
@@ -351,7 +459,8 @@ class Runner {
         if (!box) throw new Error('element not found');
         const text = await frameCall(box.frame, 'extractText', { target: step.target, scope: ctx.scope });
         ctx.log('info', `Extracted ${step.name || 'text'}: ${String(text).slice(0, 80)}`, step.id);
-        ctx.output(step.name || 'text', ctx.scope ? { ...(ctx.vars.row || {}), [step.name || 'text']: text } : text);
+        if (ctx.rowResult) ctx.rowResult[step.name || 'text'] = text; // per-row result column
+        else ctx.output(step.name || 'text', ctx.scope ? { ...(ctx.vars.row || {}), [step.name || 'text']: text } : text);
         ctx.vars.vars[step.name || 'text'] = text;
         return;
       }
@@ -514,4 +623,4 @@ class Runner {
   }
 }
 
-module.exports = { Runner, render };
+module.exports = { Runner, render, lookup, truthy, rowCondition };

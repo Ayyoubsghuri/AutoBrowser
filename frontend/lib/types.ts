@@ -13,7 +13,7 @@ export type Target = {
 };
 
 export type StepType =
-  | 'goto' | 'click' | 'type' | 'select' | 'press' | 'scroll' | 'wait'
+  | 'goto' | 'click' | 'type' | 'select' | 'check' | 'press' | 'scroll' | 'wait'
   | 'extract_table' | 'extract_text' | 'login' | 'loop' | 'if' | 'ai';
 
 export type Step = {
@@ -46,6 +46,7 @@ export type Flow = {
   description?: string | null;
   steps: Step[];
   compiled?: Compiled | null;
+  data?: FlowData | null;
   created: number;
   updated: number;
 };
@@ -103,3 +104,33 @@ export type Compiled = {
   warnings: string[];
   steps: Step[];
 };
+
+export type Dataset = {
+  id: string;
+  name: string;
+  kind: 'excel' | 'csv' | 'pdf';
+  columns: string[];
+  row_count: number;
+  rows: Record<string, string>[];
+  sheets: string[];
+  sheet?: string | null;
+  header_row: number;
+  files: { name: string; pages?: number; form_fields: string[] }[];
+  rules: PdfRule[];
+};
+
+export type PdfRule = { name: string; kind: 'form_field' | 'after_label' | 'regex' | 'value'; pattern?: string; values?: Record<string, string> };
+
+export type FilterOp = 'empty' | 'not_empty' | 'equals' | 'not_equals' | 'contains' | 'truthy' | 'falsy';
+
+export type FlowData = {
+  dataset_id: string;
+  joins: { dataset_id: string; left: string; right: string; prefix?: string | null }[];
+  filter?: { column: string; op: FilterOp; value?: string | null } | null;
+  start_step_id?: string | null;
+  stop_on_error?: boolean;
+  first_row?: number;
+  max_rows?: number | null;
+};
+
+export type RunProgress = { runId: string; flowId: string; done: number; total: number; ok: number; failed: number };

@@ -383,10 +383,10 @@ handle('rec:mode', (mode) => {
 handle('runner:run', (opts) => runner.runMany(opts));
 handle('runner:stop', (runId) => runner.stop(runId));
 handle('shell:open', (url) => { if (/^https?:/.test(url)) shell.openExternal(url); });
-handle('file:save', async ({ name, content }) => {
+handle('file:save', async ({ name, content, base64 }) => {
   const r = await dialog.showSaveDialog(win, { defaultPath: path.join(app.getPath('downloads'), name) });
   if (r.canceled || !r.filePath) return null;
-  fs.writeFileSync(r.filePath, content);
+  fs.writeFileSync(r.filePath, base64 ? Buffer.from(content, 'base64') : content);
   return r.filePath;
 });
 

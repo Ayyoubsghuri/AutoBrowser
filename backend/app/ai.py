@@ -406,6 +406,41 @@ def _strip_secrets(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+DATA_RULES = """
+DATA: this flow runs ONCE PER ROW of the user's data (Excel / CSV / PDFs, possibly joined from several
+files). Steps before the step whose id is `start_step_id` run once (e.g. login); that step and all
+after it run for every row. Keep that id on the step that starts the per-row part, and make the
+per-row part end in a state where it can start again (e.g. back on an empty form).
+- Use {{row.<column>}} in `value` / `url` / `instruction` (columns of joined files under a prefix: {{row.<prefix>.<column>}}).
+- Checkboxes, radios and switches: a `check` step whose `value` is "true", "false" or {{row.<column>}}
+  (yes / x / 1 / true / oui count as on). Do not use `click` for these: clicking toggles.
+- Row conditions: `if` step (or `condition` on any step) {"row": "<column>", "op": "truthy|falsy|empty|not_empty|equals|not_equals|contains", "value": "..."}.
+- Do NOT add a `loop` over the data rows: the runner already repeats per row. Use loops only for things on the page.
+- If the row has a value worth recording after submitting (a confirmation number), extract it with an
+  `extract_text` step: per-row extracts are added to that row's result."""
+
+
+def _data_context(flow: dict[str, Any], private: bool) -> str | None:
+    cfg = flow.get("data")
+    if not cfg:
+        return None
+    from . import data_rows
+    try:
+        columns, rows, total = data_rows.resolve(cfg)
+    except LookupError:
+        return None
+    sample = {k: v for k, v in (rows[0] if rows else {}).items() if not k.startswith("_")}
+    info = {
+        "rows": total,
+        "columns": columns,
+        "joins": [{"left": j.get("left"), "right": j.get("right"), "prefix": j.get("prefix")} for j in cfg.get("joins") or []],
+        "filter": cfg.get("filter"),
+        "start_step_id": cfg.get("start_step_id"),
+        "example_row": mask_deep(sample) if private else sample,
+    }
+    return "DATA:\n" + json.dumps(info, ensure_ascii=False, indent=1)
+
+
 def build_compile_prompt(
     flow: dict[str, Any],
     goal: str | None = None,
@@ -435,6 +470,9 @@ def build_compile_prompt(
     if not goal:
         parts.append("No goal given: infer the most likely intent from the recording and say so in `understanding`.")
     parts.append("RECORDING:\n" + json.dumps(payload, ensure_ascii=False, indent=1))
+    data_note = _data_context(flow, private)
+    if data_note:
+        parts.append(data_note)
     previous = flow.get("compiled")
     if feedback and previous:
         prev_steps = previous.get("steps")
@@ -444,7 +482,7 @@ def build_compile_prompt(
         parts.append(f"FEEDBACK to apply:\n{feedback}")
     elif feedback:
         parts.append(f"Extra instructions from the user:\n{feedback}")
-    system = COMPILE_SYSTEM + GOAL_RULES + OUTLINE_RULES + (PRIVATE_RULES if private else "")
+    system = COMPILE_SYSTEM + GOAL_RULES + OUTLINE_RULES + (DATA_RULES if flow.get("data") else "") + (PRIVATE_RULES if private else "")
     return system, "\n\n".join(parts)
 
 
@@ -579,3 +617,89 @@ def locate(req: LocateRequest) -> dict[str, Any]:
         "Return index -1 if nothing matches."
     )
     return _call_json("You locate elements on web pages.", _snapshot_content(req.snapshot, header), LOCATE_SCHEMA, effort="low", max_tokens=2000)
+
+
+# --------------------------------------------------------------------------- data sources (Excel / PDF)
+
+def is_local_provider() -> bool:
+    if settings_store.get_provider() != "openai":
+        return False
+    base = (settings_store.get_base_url("openai") or "").lower()
+    return any(h in base for h in ("://localhost", "://127.0.0.1", "://0.0.0.0", "://[::1]"))
+
+
+def template_text(texts: list[str]) -> list[str]:
+    """Private mode for PDFs: words that appear in *every* file are the form's own labels;
+    everything else is data and gets masked by shape."""
+    token = re.compile(r"\S+")
+    common = set(token.findall(texts[0])) if texts else set()
+    for t in texts[1:]:
+        common &= set(token.findall(t))
+    if len(texts) < 2:
+        common = set()
+    out = []
+    for t in texts:
+        lines = []
+        for line in t.splitlines():
+            lines.append(token.sub(lambda m: m.group(0) if m.group(0) in common else mask_text(m.group(0), 30), line))
+        out.append("\n".join(lines))
+    return out
+
+
+RULES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "rules": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["form_field", "after_label", "regex"]},
+                    "pattern": {"type": "string"},
+                },
+                "required": ["name", "kind", "pattern"],
+                "additionalProperties": False,
+            },
+        },
+        "notes": {"type": "string"},
+    },
+    "required": ["rules", "notes"],
+    "additionalProperties": False,
+}
+
+
+def suggest_pdf_rules(files: list[dict[str, Any]], fields: list[str]) -> dict[str, Any]:
+    private = settings_store.get_privacy() and not is_local_provider()
+    sample = files[:3]
+    texts = [f.get("text", "")[:6000] for f in sample]
+    if private:
+        texts = template_text(texts)
+    form_fields = sorted({k for f in files for k in f.get("fields", {})})
+    body = [
+        f"Fields the user wants from each PDF: {', '.join(fields) if fields else '(suggest the useful ones)'}",
+        f"Fillable form fields present: {', '.join(form_fields) if form_fields else 'none'}",
+    ]
+    for i, t in enumerate(texts):
+        body.append(f"--- PDF {i + 1} text ---\n{t}")
+    system = (
+        "You write extraction rules that run locally on PDF text, one rule per wanted field.\n"
+        "kinds: form_field (pattern = exact fillable field name, best when present), after_label (pattern = the "
+        "label text printed before the value, e.g. 'Invoice No'), regex (Python regex, use one capture group).\n"
+        "Prefer form_field, then after_label, then regex. Field `name` is the column name the user will see."
+    )
+    if private:
+        system += ("\nPRIVATE MODE: words that differ between files are masked by shape (X/x letters, 9 digits); "
+                   "only the form's shared labels are readable. Build rules from labels and value shapes.")
+    return _call_json(system, [{"type": "text", "text": "\n\n".join(body)}], RULES_SCHEMA, effort="medium", max_tokens=8000)
+
+
+def extract_pdf_values(f: dict[str, Any], fields: list[str]) -> dict[str, str]:
+    schema = {"type": "object", "properties": {k: {"type": "string"} for k in fields},
+              "required": list(fields), "additionalProperties": False}
+    text = f.get("text", "")[:30000]
+    form = json.dumps(f.get("fields", {}), ensure_ascii=False)[:4000]
+    return _call_json(
+        "Extract the requested fields from this document. Use an empty string when a field is absent. Copy values exactly.",
+        [{"type": "text", "text": f"Fields: {', '.join(fields)}\nForm fields: {form}\n\nDocument text:\n{text}"}],
+        schema, effort="low", max_tokens=4000)

@@ -474,6 +474,22 @@ function flushPending() {
 
 const CLICKABLE = 'a,button,[role=button],[role=link],[role=tab],[role=menuitem],[role=option],[role=checkbox],[role=switch],input[type=checkbox],input[type=radio],input[type=submit],input[type=button],label,summary,[onclick],[tabindex]';
 
+// Checkbox-like controls. `control` holds the state, `target` is what you click.
+function toggleControl(el) {
+  if (!el || el.nodeType !== 1) return null;
+  if (el.tagName === 'INPUT' && /^(checkbox|radio)$/i.test(el.type)) return { control: el, target: el };
+  const label = el.closest('label');
+  if (label && label.control && /^(checkbox|radio)$/i.test(label.control.type)) return { control: label.control, target: label.control };
+  const aria = el.closest('[role=checkbox],[role=switch],[role=radio],[role=menuitemcheckbox]');
+  if (aria) return { control: aria, target: aria };
+  return null;
+}
+function isChecked(c) {
+  if (!c) return false;
+  if (c.tagName === 'INPUT') return !!c.checked;
+  return c.getAttribute('aria-checked') === 'true' || c.getAttribute('aria-pressed') === 'true';
+}
+
 function onClick(e) {
   if (!e.isTrusted) return;
   const raw = e.composedPath ? e.composedPath()[0] : e.target;
@@ -481,6 +497,13 @@ function onClick(e) {
   if (mode === 'record') {
     if (isTextInput(el) || el.tagName === 'SELECT' || el.tagName === 'OPTION') return;
     flushPending();
+    const toggle = toggleControl(el);
+    if (toggle) {
+      // checkbox / radio / switch: record the resulting state, not a blind click
+      const tgt = buildTarget(toggle.target);
+      setTimeout(() => emit({ type: 'check', target: tgt, value: isChecked(toggle.control) ? 'true' : 'false' }), 60);
+      return;
+    }
     const t = el.closest(CLICKABLE) || el;
     emit({ type: 'click', target: buildTarget(t) });
     return;
@@ -611,6 +634,13 @@ const commands = {
     if (typeof el.select === 'function') { try { el.select(); } catch {} }
     const val = el.isContentEditable ? el.innerText : el.value;
     return { found: true, hasValue: !!val };
+  },
+  checkState({ target, scope }) {
+    const el = findElement(target, scope);
+    if (!el) return { found: false };
+    const t = toggleControl(el) || { control: el.querySelector && el.querySelector('input[type=checkbox],input[type=radio],[role=checkbox],[role=switch]') };
+    if (!t.control) return { found: true, checked: null };
+    return { found: true, checked: isChecked(t.control), disabled: !!t.control.disabled, radio: t.control.type === 'radio' || t.control.getAttribute('role') === 'radio' };
   },
   setSelect({ target, scope, value, label }) {
     const el = findElement(target, scope);

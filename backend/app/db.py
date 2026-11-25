@@ -54,13 +54,23 @@ CREATE TABLE IF NOT EXISTS runs (
   started REAL NOT NULL,
   finished REAL
 );
+CREATE TABLE IF NOT EXISTS datasets (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL,              -- excel | csv | pdf
+  columns TEXT NOT NULL DEFAULT '[]',
+  rows TEXT NOT NULL DEFAULT '[]',
+  meta TEXT NOT NULL DEFAULT '{}',
+  created REAL NOT NULL,
+  updated REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
 """
 
-JSON_COLS = {"steps", "compiled", "log", "output", "extra"}
+JSON_COLS = {"steps", "compiled", "log", "output", "extra", "data", "columns", "rows", "meta"}
 
 
 def connect(path: str | None = None) -> sqlite3.Connection:
@@ -72,7 +82,15 @@ def connect(path: str | None = None) -> sqlite3.Connection:
             _conn.execute("PRAGMA foreign_keys = ON")
             _conn.execute("PRAGMA journal_mode = WAL")
             _conn.executescript(SCHEMA)
+            _migrate(_conn)
         return _conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(flows)")}
+    if "data" not in cols:  # per-flow data source config (added in 0.3)
+        conn.execute("ALTER TABLE flows ADD COLUMN data TEXT")
+    conn.commit()
 
 
 @contextmanager

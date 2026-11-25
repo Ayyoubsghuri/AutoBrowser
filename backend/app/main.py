@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from . import config, db
-from .routers import ai_routes, flows, profiles, runs
+from .routers import ai_routes, data, flows, profiles, runs
 
 
 def create_app() -> FastAPI:
@@ -35,7 +35,7 @@ def create_app() -> FastAPI:
     def health():
         return {"ok": True}
 
-    for r in (profiles.router, flows.router, runs.router, ai_routes.router):
+    for r in (profiles.router, flows.router, runs.router, ai_routes.router, data.router):
         app.include_router(r)
     return app
 

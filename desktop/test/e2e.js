@@ -241,6 +241,101 @@ function screen(name) {
     await ui.waitForSelector('text=AI build');
     await sleep(400);
     screen('07-flow-detail');
+
+    // ---------------------------------------------------- Excel-driven form filling (2 files joined, checkbox, per-row results)
+    await ui.unroute('**/flows/*/compile');
+    const FIX = path.join(__dirname, 'fixtures');
+    const call = (m, p, body) => ui.evaluate(async ({ m, p, body }) => {
+      const b = await window.autobrowser.backend();
+      const r = await fetch(`http://127.0.0.1:${b.port}${p}`, { method: m, headers: { 'content-type': 'application/json', 'x-autobrowser-token': b.token }, body: body && JSON.stringify(body) });
+      return r.json();
+    }, { m, p, body });
+    const up = (file) => call('POST', '/datasets', { files: [{ filename: file, content_b64: fs.readFileSync(path.join(FIX, file)).toString('base64') }] });
+    const people = await up('applicants.xlsx');
+    const phones = await up('phones.csv');
+    check(people.row_count === 3 && people.columns.join() === 'Case ID,Name,Agree,City', 'Excel imported (3 rows, 4 columns)');
+    check(phones.columns.join() === 'Case ID,phone', 'CSV imported (; separated)');
+
+    // record one application using row 1 of the Excel
+    await ui.fill('.address input', `${base}/apply.html`);
+    await ui.press('.address input', 'Enter');
+    const apply = await tabPage(/apply\.html/);
+    await apply.waitForSelector('#app');
+    await ui.click('.railbtn[data-tip="Recorder"]');
+    ui.once('dialog', (d) => d.accept());
+    await ui.click('button[title="Clear"]');
+    await waitFor(async () => (await ui.evaluate(() => localStorage.getItem('ab.recorder.draft'))) === '[]', 'recorder cleared');
+    await ui.selectOption('select:has(option:text("No data: record a one-off flow"))', { label: 'applicants · Applicants (3 rows)' }).catch(async () => {
+      await ui.selectOption('select:has(option:text("No data: record a one-off flow"))', people.id);
+    });
+    await ui.waitForSelector('text=Record with row');
+    await ui.click('.recbtn');
+    await ui.waitForSelector('.recbtn.live');
+    await sleep(300);
+    await apply.click('#fullname'); await apply.keyboard.type('Ana Lima', { delay: 15 });
+    await apply.click('#caseid'); await apply.keyboard.type('1001', { delay: 15 });
+    await apply.focus('#city');
+    await apply.keyboard.press('ArrowDown'); // real (trusted) keyboard choice, like a person: "—" -> "Rabat"
+    await apply.evaluate(() => document.getElementById('city').blur());
+    await apply.click('#agree');
+    await apply.click('#phone'); await apply.keyboard.type('0600111222', { delay: 15 });
+    await apply.click('#save');
+    await apply.waitForSelector('#ref:not(:empty)');
+    await ui.click('.tool:has-text("Pick text")');
+    await sleep(300);
+    await apply.click('#ref');
+    await sleep(500);
+    await ui.click('.recbtn');
+    await sleep(300);
+    let rsteps = JSON.parse(await ui.evaluate(() => localStorage.getItem('ab.recorder.draft')));
+    console.log('  recorded:', rsteps.map((s) => `${s.type}${s.value ? `(${s.value})` : ''}`).join(' → '));
+    check(rsteps.some((s) => s.type === 'type' && s.value === '{{row.Name}}') && rsteps.some((s) => s.type === 'type' && s.value === '{{row.Case ID}}'), 'typed values from the row became {{row.Name}} / {{row.Case ID}}');
+    check(rsteps.some((s) => s.type === 'select' && s.value === '{{row.City}}'), 'dropdown choice became {{row.City}}');
+    check(rsteps.some((s) => s.type === 'check' && s.value === 'true'), 'checkbox recorded as a "set on" step, not a click');
+
+    // map the checkbox to the Agree column and the phone to the joined file, name the extracted value
+    const checkCard = ui.locator('.step', { hasText: 'Set Consent given' });
+    await checkCard.locator('select[title="Use a column of your data"]').selectOption('Agree');
+    const phoneCard = ui.locator('.step', { hasText: 'Type into Phone' });
+    await phoneCard.locator('input.grow').first().fill('{{row.phone}}');
+    const textCard = ui.locator('.step', { hasText: 'Extract text' });
+    await textCard.locator('input[placeholder^="Output name"]').fill('reference');
+    check((await ui.locator('.step:has-text("Repeats for each data row from here")').count()) === 1, 'per-row start marker shown');
+    await ui.fill('input[placeholder^="Flow name"]', 'Submit applications');
+    await ui.click('footer button:has-text("Save")');
+    await ui.waitForSelector('text=Saved "Submit applications"');
+    screen('09-recorder-data');
+
+    // link the phone list by Case ID (like VLOOKUP) in the flow's Data card
+    await ui.click('.railbtn[data-tip="Saved flows"]');
+    await ui.click('.card:has-text("Submit applications")');
+    await ui.click('button:has-text("Link another file")');
+    await ui.click('button:has-text("Save data settings")');
+    await ui.waitForSelector('text=Rows this flow will process');
+    const dataRows = await call('GET', `/flows/${(await call('GET', '/flows')).find((f) => f.name === 'Submit applications').id}/data-rows`);
+    check(dataRows.total === 3 && dataRows.rows[0].phone === '0600111222' && dataRows.rows[1].phone === undefined, 'second file linked by Case ID (phone joined)');
+    await sleep(300);
+    screen('10-flow-data');
+
+    // run it: once per row
+    await apply.evaluate(() => { localStorage.subs = '[]'; });
+    await ui.click('button:has-text("Run")');
+    await waitFor(async () => (await ui.$('.tag.ok:has-text("data rows")')) || (await call('GET', '/runs?limit=1'))[0]?.finished, 'data run to finish', 120000);
+    const runRes = (await call('GET', '/runs?limit=1'))[0];
+    if (runRes.status !== 'success') console.log(runRes.log.map((l) => `    ${l.level}: ${l.msg}`).join('\n'));
+    const subs = JSON.parse(await (await tabPage(/apply\.html/)).evaluate(() => localStorage.subs || '[]'));
+    console.log('  submitted:', JSON.stringify(subs));
+    check(runRes.status === 'success', `data run succeeded (${runRes.status})`);
+    check(subs.length === 3, `one submission per Excel row (got ${subs.length})`);
+    check(subs[0] && subs[0].name === 'Ana Lima' && subs[0].city === 'Rabat' && subs[0].agree === true && subs[0].phone === '0600111222', 'row 1 filled correctly (incl. joined phone, ticked)');
+    check(subs[1] && subs[1].name === 'Bo Chen' && subs[1].city === 'Fes' && subs[1].agree === false && subs[1].phone === '', 'row 2: checkbox left unticked, no phone match');
+    check(subs[2] && subs[2].caseid === '1003' && subs[2].agree === true && subs[2].phone === '0700333444', 'row 3 filled correctly');
+    const results = runRes.output.filter((o) => o.name === '_rows').flatMap((o) => o.data);
+    check(results.length === 3 && results.every((r) => r._status === 'success') && results[2].reference === 'Saved ref R-1003', 'per-row status + extracted reference recorded');
+    // Run opens the Runs panel by itself
+    await ui.waitForSelector('text=data rows done');
+    await sleep(300);
+    screen('11-runs-data');
     await ui.click('.railbtn[data-tip="Accounts & logins"]');
     await sleep(400);
     screen('08-accounts');

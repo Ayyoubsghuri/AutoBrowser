@@ -1,15 +1,18 @@
 'use client';
 import { useState } from 'react';
+import { ChevronLeft, ChevronRight, Copy, FileSpreadsheet } from 'lucide-react';
 import { Bot, Clock, Eraser, KeyRound, MousePointerClick, Sparkles, Table2, X, ScanText, Timer, Save, Circle } from 'lucide-react';
 import { bridge } from '@/lib/bridge';
 import { patch, post } from '@/lib/api';
-import type { Flow, Step } from '@/lib/types';
-import { uid } from '@/lib/steps';
+import type { Dataset, Flow, Step } from '@/lib/types';
+import { defaultRowStart, uid, usesRow } from '@/lib/steps';
+import { useDatasets } from './DataPanel';
 import { StepCard } from './StepCard';
 import { BuildWithAI } from './BuildWithAI';
-import type { AppCtx } from './Shell';
+import type { AppCtx, RecData } from './Shell';
+import { get } from '@/lib/api';
 
-export function RecorderPanel({ ctx, rec, steps, setSteps, editingFlow, setEditingFlow, onClose }: {
+export function RecorderPanel({ ctx, rec, steps, setSteps, editingFlow, setEditingFlow, onClose, recData, setRecData }: {
   ctx: AppCtx;
   rec: { recording: boolean; mode?: string };
   steps: Step[];
@@ -17,7 +20,17 @@ export function RecorderPanel({ ctx, rec, steps, setSteps, editingFlow, setEditi
   editingFlow: Flow | null;
   setEditingFlow: (f: Flow | null) => void;
   onClose: () => void;
+  recData: RecData;
+  setRecData: (d: RecData) => void;
 }) {
+  const datasets = useDatasets(ctx);
+  const [rowStartId, setRowStartId] = useState<string | null>(editingFlow?.data?.start_step_id || null);
+  const columns = recData ? recData.dataset.columns : [];
+  const effectiveRowStart = recData || editingFlow?.data ? (rowStartId && steps.some((s) => s.id === rowStartId) ? rowStartId : defaultRowStart(steps)) : null;
+  const pickData = async (id: string) => {
+    if (!id) { setRecData(null); return; }
+    try { setRecData({ dataset: await get<Dataset>(`/datasets/${id}?full=true`), rowIndex: 0 }); } catch (e: any) { ctx.toast(e.message, true); }
+  };
   const b = bridge();
   const [name, setName] = useState(editingFlow?.name || '');
   const [busy, setBusy] = useState<string | null>(null);
@@ -43,7 +56,10 @@ export function RecorderPanel({ ctx, rec, steps, setSteps, editingFlow, setEditi
     setBusy(build ? 'build' : 'save');
     try {
       if (rec.recording) await b.recorder.stop();
-      const body = { name: flowName, start_url: startUrl(), steps };
+      const dataCfg = recData
+        ? { ...(editingFlow?.data || { joins: [], filter: null, stop_on_error: false, first_row: 1, max_rows: null }), dataset_id: recData.dataset.id, start_step_id: effectiveRowStart }
+        : editingFlow?.data ? { ...editingFlow.data, start_step_id: effectiveRowStart } : undefined;
+      const body = { name: flowName, start_url: startUrl(), steps, ...(dataCfg ? { data: dataCfg } : {}) };
       let flow: Flow = editingFlow ? await patch(`/flows/${editingFlow.id}`, body) : await post('/flows', body);
       setEditingFlow(flow);
       ctx.toast(`Saved "${flow.name}"`);
@@ -106,12 +122,50 @@ export function RecorderPanel({ ctx, rec, steps, setSteps, editingFlow, setEditi
           </>
         )}
 
+        <div className="section">Data (optional)</div>
+        <div className="card compact">
+          <div className="row">
+            <FileSpreadsheet size={15} color="var(--ok)" />
+            <select className="select small grow" value={recData?.dataset.id || ''} onChange={(e) => pickData(e.target.value)}>
+              <option value="">{editingFlow?.data ? 'Keep this flow\u2019s data' : 'No data: record a one-off flow'}</option>
+              {datasets.list.map((d) => <option key={d.id} value={d.id}>{d.name} ({d.row_count} rows)</option>)}
+            </select>
+            <button className="btn sm" onClick={() => ctx.openPanel('data')}>Import</button>
+          </div>
+          {recData && (() => {
+            const row = recData.dataset.rows[recData.rowIndex] || {};
+            const n = recData.dataset.rows.length;
+            return (
+              <>
+                <div className="row small">
+                  <span className="grow muted">Record with row <b>{recData.rowIndex + 1}</b> of {n}. Type these values on the site; they turn into columns automatically.</span>
+                  <button className="iconbtn" style={{ width: 26, height: 26 }} disabled={recData.rowIndex <= 0} onClick={() => setRecData({ ...recData, rowIndex: recData.rowIndex - 1 })} aria-label="Previous row"><ChevronLeft size={14} /></button>
+                  <button className="iconbtn" style={{ width: 26, height: 26 }} disabled={recData.rowIndex >= n - 1} onClick={() => setRecData({ ...recData, rowIndex: recData.rowIndex + 1 })} aria-label="Next row"><ChevronRight size={14} /></button>
+                </div>
+                <div className="row wrap" style={{ gap: 4 }}>
+                  {Object.entries(row).filter(([k]) => !k.startsWith('_')).map(([k, v]) => (
+                    <button key={k} className="tag" style={{ border: 0, cursor: 'copy', maxWidth: '100%' }} title={`Copy ${k}`}
+                      onClick={() => { navigator.clipboard.writeText(String(v ?? '')); ctx.toast(`Copied ${k}`); }}>
+                      <span className="muted">{k}:</span>&nbsp;<span className="ellipsis" style={{ maxWidth: 150 }}>{String(v ?? '') || '—'}</span><Copy size={10} />
+                    </button>
+                  ))}
+                </div>
+              </>
+            );
+          })()}
+          {(recData || editingFlow?.data) && steps.length > 0 && (
+            <div className="small muted">Steps before <b>“repeats for each row”</b> (e.g. logging in) run once. Move it with the ↻ button on a step.
+              {!steps.some(usesRow) && ' No step uses the data yet: type a value from the row, or pick a column on a step.'}</div>
+          )}
+        </div>
+
         <div className="section">Steps ({steps.length})</div>
         {steps.length === 0 ? (
           <div className="empty"><div className="big"><MousePointerClick size={26} /></div>No steps yet.</div>
         ) : (
           steps.map((s, i) => (
-            <StepCard key={s.id} step={s} index={i} onChange={(n) => update(i, n)} onRemove={() => remove(i)} onMove={(d) => move(i, d)} />
+            <StepCard key={s.id} step={s} index={i} onChange={(n) => update(i, n)} onRemove={() => remove(i)} onMove={(d) => move(i, d)}
+              columns={columns} rowStart={s.id === effectiveRowStart} onSetRowStart={effectiveRowStart ? () => setRowStartId(s.id) : undefined} />
           ))
         )}
       </div>

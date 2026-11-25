@@ -16,6 +16,7 @@ StepType = Literal[
     "click",
     "type",          # fill an input (value may contain {{templates}})
     "select",        # <select> option
+    "check",         # set a checkbox / radio / switch to on or off (value: true/false or {{row.col}})
     "press",         # keyboard key, e.g. Enter
     "scroll",
     "wait",          # wait ms or wait for selector
@@ -69,12 +70,64 @@ class Step(BaseModel):
 Step.model_rebuild()
 
 
+class UploadFile(BaseModel):
+    filename: str
+    content_b64: str
+
+
+class DatasetUpload(BaseModel):
+    files: list[UploadFile]
+    name: Optional[str] = None
+    sheet: Optional[str] = None
+    header_row: int = 1
+    dataset_id: Optional[str] = Field(default=None, description="Add PDFs to an existing PDF dataset")
+
+
+class PdfRule(BaseModel):
+    name: str
+    kind: Literal["form_field", "after_label", "regex", "value"]
+    pattern: Optional[str] = None
+    values: Optional[dict[str, str]] = None
+
+
+class DatasetPatch(BaseModel):
+    name: Optional[str] = None
+    sheet: Optional[str] = None
+    header_row: Optional[int] = None
+    rules: Optional[list[PdfRule]] = None
+
+
+class JoinSpec(BaseModel):
+    dataset_id: str
+    left: str           # column in the main data
+    right: str          # matching column in the other file
+    prefix: Optional[str] = None  # put the other file's columns under {{row.<prefix>.col}}
+
+
+class RowFilter(BaseModel):
+    column: str
+    op: Literal["empty", "not_empty", "equals", "not_equals", "contains", "truthy", "falsy"] = "not_empty"
+    value: Optional[str] = None
+
+
+class FlowData(BaseModel):
+    """Run the flow once per row of a data source."""
+    dataset_id: str
+    joins: list[JoinSpec] = Field(default_factory=list)
+    filter: Optional[RowFilter] = None
+    start_step_id: Optional[str] = None   # steps before it run once (e.g. login); from it on, once per row
+    stop_on_error: bool = False
+    first_row: int = 1                    # 1-based, inclusive
+    max_rows: Optional[int] = None
+
+
 class FlowIn(BaseModel):
     name: str
     start_url: Optional[str] = None
     description: Optional[str] = None
     steps: list[dict[str, Any]] = Field(default_factory=list)
     compiled: Optional[dict[str, Any]] = None
+    data: Optional[FlowData] = None
 
 
 class FlowPatch(BaseModel):
@@ -83,6 +136,7 @@ class FlowPatch(BaseModel):
     description: Optional[str] = None
     steps: Optional[list[dict[str, Any]]] = None
     compiled: Optional[dict[str, Any]] = None
+    data: Optional[FlowData] = None
 
 
 class ProfileIn(BaseModel):

@@ -45,6 +45,22 @@ Replay it exactly with no AI, or let Claude turn it into a smarter automation
 
 Results (tables, text) are listed under **Runs** and can be exported as CSV or JSON.
 
+### Filling websites from Excel, CSV or PDFs
+1. **Data** (spreadsheet icon) → **Import** an `.xlsx`, `.xls` or `.csv` (pick the sheet and header row), or several **PDFs**:
+   each PDF becomes one row. Fields come from fillable PDF form fields, or from rules you set: *after label*
+   ("File number") or a regex. **Suggest rules** asks the AI; in private mode it only sees the labels shared by all
+   your PDFs. Everything else stays local.
+2. **Recorder** → *Data* → choose the file. Record one entry by hand using row 1. Values you type that match the row
+   become `{{row.Column}}` automatically, and you can also pick a column on any step. Checkboxes are recorded as
+   **set on / off** steps and can follow a column (yes / x / 1 / true / oui = ticked).
+3. Steps before **"Repeats for each data row from here"** (e.g. logging in) run once; the rest run for every row.
+   Move the marker with ↻ on a step.
+4. **Flows → your flow → Data**: **link another file** by a shared column (like VLOOKUP), so a second Excel adds
+   columns to the first. You can also filter rows (e.g. only where *Status* is empty), set a start row or maximum, and
+   choose whether to stop at the first error.
+5. **Run**: progress shows per row. Under **Runs** → **Excel**, you get your rows back with `_status`, `_message` and
+   any values extracted per row (e.g. the confirmation number the site showed).
+
 ### AI providers
 Pick one in **Settings → AI**; each keeps its own encrypted key and model:
 

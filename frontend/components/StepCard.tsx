@@ -1,24 +1,38 @@
 'use client';
 import {
-  ArrowDown, ArrowUp, Bot, Clock, Globe, Keyboard, KeyRound, List, MousePointerClick, Repeat, ScrollText, Table2, Trash2, Type, GitBranch, ChevronDown, ScanText,
+  ArrowDown, ArrowUp, Bot, Clock, Globe, Keyboard, KeyRound, List, MousePointerClick, Repeat, ScrollText, Table2, Trash2, Type, GitBranch, ChevronDown, ScanText, CheckSquare, Repeat1,
 } from 'lucide-react';
 import type { Step } from '@/lib/types';
 import { bestSelector, stepTitle } from '@/lib/steps';
 
 const ICONS: Record<string, React.ComponentType<{ size?: number }>> = {
   goto: Globe, click: MousePointerClick, type: Type, select: ChevronDown, press: Keyboard, scroll: ScrollText,
-  wait: Clock, extract_table: Table2, extract_text: ScanText, login: KeyRound, loop: Repeat, if: GitBranch, ai: Bot,
+  check: CheckSquare, wait: Clock, extract_table: Table2, extract_text: ScanText, login: KeyRound, loop: Repeat, if: GitBranch, ai: Bot,
 };
 
-export function StepCard({ step, index, onChange, onRemove, onMove, readOnly = false }: {
+/** Lets a value come from a column of the current data row. */
+function ColumnPicker({ columns, onPick }: { columns: string[]; onPick: (tpl: string) => void }) {
+  if (!columns.length) return null;
+  return (
+    <select className="select small" style={{ width: 120, flex: 'none' }} value="" title="Use a column of your data"
+      onChange={(e) => e.target.value && onPick(`{{row.${e.target.value}}}`)}>
+      <option value="">↳ column…</option>
+      {columns.filter((c) => !c.startsWith('_')).map((c) => <option key={c} value={c}>{c}</option>)}
+    </select>
+  );
+}
+
+export function StepCard({ step, index, onChange, onRemove, onMove, readOnly = false, columns = [], rowStart = false, onSetRowStart }: {
   step: Step; index: number;
   onChange?: (s: Step) => void; onRemove?: () => void; onMove?: (dir: -1 | 1) => void; readOnly?: boolean;
+  columns?: string[]; rowStart?: boolean; onSetRowStart?: () => void;
 }) {
   const Icon = ICONS[step.type] || List;
   const set = (patch: Partial<Step>) => onChange?.({ ...step, ...patch });
   const sel = bestSelector(step);
   return (
-    <div className="card compact step">
+    <div className="card compact step" style={rowStart ? { borderColor: 'color-mix(in srgb, var(--ok) 55%, transparent)' } : undefined}>
+      {rowStart && <div className="small row" style={{ color: 'var(--ok)', fontWeight: 600 }}><Repeat1 size={13} /> Repeats for each data row from here</div>}
       <div className="row">
         <span className="num">{index + 1}</span>
         <span className={`ico ${step.type === 'ai' ? 'ai' : ''}`}><Icon size={16} /></span>
@@ -33,6 +47,7 @@ export function StepCard({ step, index, onChange, onRemove, onMove, readOnly = f
           <div className="acts">
             <button className="iconbtn" onClick={() => onMove?.(-1)} aria-label="Move up"><ArrowUp size={14} /></button>
             <button className="iconbtn" onClick={() => onMove?.(1)} aria-label="Move down"><ArrowDown size={14} /></button>
+            {onSetRowStart && !rowStart && <button className="iconbtn" onClick={onSetRowStart} title="Repeat for each data row from this step" aria-label="Repeat from here"><Repeat1 size={14} /></button>}
             <button className="iconbtn" onClick={onRemove} aria-label="Delete step"><Trash2 size={14} /></button>
           </div>
         )}
@@ -40,8 +55,25 @@ export function StepCard({ step, index, onChange, onRemove, onMove, readOnly = f
 
       {/* editable details */}
       {!readOnly && (step.type === 'type' || step.type === 'select') && (
-        <input className="input small" value={step.value ?? ''} onChange={(e) => set({ value: e.target.value })}
-          placeholder="Value — supports {{account.username}}, {{today}}, {{row.col}}" type={step.secret && !String(step.value).includes('{{') ? 'password' : 'text'} />
+        <div className="row" style={{ gap: 6 }}>
+          <input className="input small grow" value={step.value ?? ''} onChange={(e) => set({ value: e.target.value })}
+            placeholder="Value — supports {{account.username}}, {{today}}, {{row.col}}" type={step.secret && !String(step.value).includes('{{') ? 'password' : 'text'} />
+          <ColumnPicker columns={columns} onPick={(tpl) => set({ value: tpl })} />
+        </div>
+      )}
+      {!readOnly && step.type === 'check' && (
+        <div className="row" style={{ gap: 6 }}>
+          <select className="select small grow" value={['true', 'false'].includes(step.value || '') ? step.value : 'col'}
+            onChange={(e) => e.target.value !== 'col' && set({ value: e.target.value })}>
+            <option value="true">Always tick</option>
+            <option value="false">Always untick</option>
+            <option value="col" disabled={!/\{\{/.test(step.value || '')}>From column: {step.value}</option>
+          </select>
+          <ColumnPicker columns={columns} onPick={(tpl) => set({ value: tpl })} />
+        </div>
+      )}
+      {!readOnly && step.type === 'check' && columns.length > 0 && (
+        <div className="small muted">With a column: ticked when the cell is yes / x / 1 / true / oui, unticked otherwise.</div>
       )}
       {!readOnly && step.type === 'goto' && (
         <input className="input small mono" value={step.url ?? ''} onChange={(e) => set({ url: e.target.value })} />
