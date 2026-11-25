@@ -15,7 +15,7 @@ DEFAULT_MODELS = {
 }
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 
-DEFAULTS: dict[str, Any] = {"provider": "anthropic", "human_speed": 1.0, "stealth": True}
+DEFAULTS: dict[str, Any] = {"provider": "anthropic", "human_speed": 1.0, "stealth": True, "privacy_mode": True}
 
 # settings keys per provider (anthropic keeps its original key names)
 _KEY = {"anthropic": "anthropic_api_key_enc", "openai": "openai_api_key_enc", "nvidia": "nvidia_api_key_enc"}
@@ -55,6 +55,10 @@ def get_base_url(provider: str | None = None) -> str | None:
     return None
 
 
+def get_privacy() -> bool:
+    return bool(_get("privacy_mode"))
+
+
 def public() -> dict[str, Any]:
     return {
         "provider": get_provider(),
@@ -67,6 +71,7 @@ def public() -> dict[str, Any]:
         },
         "human_speed": _get("human_speed"),
         "stealth": _get("stealth"),
+        "privacy_mode": get_privacy(),
     }
 
 
@@ -85,7 +90,7 @@ def update(**kw: Any) -> dict[str, Any]:
             _set(_MODEL[p], kw[f"{p}_model"].strip())
     if kw.get("openai_base_url") is not None:
         _set("openai_base_url", kw["openai_base_url"].strip().rstrip("/") or None)
-    for key in ("human_speed", "stealth"):
+    for key in ("human_speed", "stealth", "privacy_mode"):
         if kw.get(key) is not None:
             _set(key, kw[key])
     return public()

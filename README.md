@@ -56,6 +56,24 @@ Pick one in **Settings → AI**; each keeps its own encrypted key and model:
 
 You can type any model id your account can use.
 
+### Private mode (on by default): the AI reads the code, never the data
+For government, banking, health or any personal data. With **Settings → Private mode** on:
+
+- While recording, each page is saved as a **code outline**: HTML structure, ids, classes, field names,
+  labels, column headers and button captions. Every data value is masked by its shape:
+  `John Smith 2024-05-01` → `Xxxx Xxxxx 9999-99-99`, `$1,250.00` → `$9,999.99`. Long lists collapse to
+  "… 47 more rows like the ones above".
+- **Build with AI** sends only that outline and your steps with values masked, URL parameters
+  removed (`?id=…`) and text-based selectors dropped. The AI builds loops, pagination and extraction from the
+  structure; the real selectors and values are **put back on your computer** after it answers.
+- **During runs**, AI steps get the masked outline instead of the page text, **no screenshots**, and
+  `{{row.x}}` placeholders instead of real row values (filled in locally when typing).
+- **Preview what the AI will see** on the Build with AI screen shows the exact text that would be sent.
+- Passwords and 2FA codes are never sent in any mode. Your own goal text is sent as written, so don't paste data into it.
+
+For zero data leaving the machine at all, combine private mode with a local model (OpenAI provider +
+`http://localhost:11434/v1` for Ollama), or skip AI and run flows in **Exact** mode.
+
 ### Templates you can use in values
 `{{account.username}}` `{{account.password}}` `{{account.totp}}` `{{today}}` `{{now}}` `{{row.<column>}}` (inside a row loop) `{{vars.<name>}}` (results of earlier extract steps)
 

@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Bot, Check, Gauge, ShieldCheck, X } from 'lucide-react';
+import { Bot, Check, Gauge, Lock, ShieldCheck, X } from 'lucide-react';
 import { bridge } from '@/lib/bridge';
 import { put } from '@/lib/api';
 import type { AppCtx } from './Shell';
@@ -99,6 +99,18 @@ export function SettingsPanel({ ctx, onClose }: { ctx: AppCtx; onClose: () => vo
           {provider === 'nvidia' && (
             <div className="small muted">Uses NVIDIA&apos;s hosted API (integrate.api.nvidia.com). Screenshots are only sent to vision models.</div>
           )}
+        </div>
+
+        <div className="card">
+          <div className="row"><Lock size={16} color="var(--ok)" /><div className="title grow">Private mode</div>
+            <input type="checkbox" aria-label="Private mode" checked={s?.privacy_mode ?? true}
+              onChange={(e) => save({ privacy_mode: e.target.checked }, e.target.checked ? 'Private mode on: the AI sees code, not data' : 'Private mode off')} /></div>
+          <div className="small muted">
+            The AI reads each page&apos;s <b>code</b> (HTML structure, ids, classes, field names, labels, column headers, button captions)
+            but never its <b>data</b>: every value is masked by shape (“John Smith 2024” → “Xxxx Xxxxx 9999”), URLs lose their
+            parameters, and no screenshots are sent. Real values are put back on your computer after the AI answers.
+            Use it for government, banking, health or any personal data.
+          </div>
         </div>
 
         <div className="card">

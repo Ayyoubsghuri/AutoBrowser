@@ -86,3 +86,14 @@ def compile_flow(fid: str, body: CompileIn | None = None):
     with db.tx() as c:
         c.execute("UPDATE flows SET compiled=?, updated=? WHERE id=?", (db.dumps(compiled), db.now(), fid))
     return _flow(fid)
+
+
+@router.post("/flows/{fid}/ai-preview")
+def ai_preview(fid: str, body: CompileIn | None = None):
+    """Exactly what 'Build with AI' would send, without sending it."""
+    flow = _flow(fid)
+    body = body or CompileIn()
+    system, text = ai.build_compile_prompt(flow, goal=(body.goal or "").strip() or None, output_kind=body.output_kind,
+                                           output_fields=body.output_fields, feedback=(body.feedback or "").strip() or None)
+    from .. import settings_store
+    return {"private": settings_store.get_privacy(), "text": text, "chars": len(text)}

@@ -36,6 +36,7 @@ export type Step = {
   condition?: Record<string, unknown>;
   steps?: Step[];
   ts?: number;
+  page_outline?: string; // masked HTML outline captured while recording
 };
 
 export type Flow = {
@@ -80,6 +81,7 @@ export type Settings = {
   providers: Record<'anthropic' | 'openai' | 'nvidia', ProviderInfo>;
   human_speed: number;
   stealth: boolean;
+  privacy_mode: boolean; // AI reads page code, never page data
 };
 
 export type RunMode = 'exact' | 'assist' | 'compiled';
@@ -88,6 +90,7 @@ export type Suggestion = { title: string; detail: string; instruction: string };
 export type OutputKind = 'data' | 'action' | 'both';
 
 export type Compiled = {
+  private?: boolean;
   goal?: string | null;
   summary: string;
   understanding?: string;

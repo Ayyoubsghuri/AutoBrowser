@@ -1,7 +1,7 @@
 'use client';
 import { useMemo, useState } from 'react';
 import {
-  AlertTriangle, ArrowLeft, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, Database, Loader2, MousePointerClick, Sparkles, Wand2, X,
+  AlertTriangle, ArrowLeft, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, Database, Eye, Loader2, Lock, MousePointerClick, Sparkles, Unlock, Wand2, X,
 } from 'lucide-react';
 import { post } from '@/lib/api';
 import type { Flow, OutputKind } from '@/lib/types';
@@ -51,6 +51,8 @@ export function BuildWithAI({ ctx, flow: initial, onDone, onCancel, onRecordMore
   const [feedback, setFeedback] = useState('');
   const [showSteps, setShowSteps] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ text: string; chars: number; private: boolean } | null>(null);
+  const privateMode = ctx.settings?.privacy_mode !== false;
 
   const c = flow.compiled;
   const counts = useMemo(() => {
@@ -82,11 +84,18 @@ export function BuildWithAI({ ctx, flow: initial, onDone, onCancel, onRecordMore
 
   const build = () => {
     if (!goal.trim()) { setError('Tell the AI what you are trying to do.'); return; }
-    run({
-      goal: goal.trim(),
-      output_kind: kind,
-      output_fields: kind === 'action' ? [] : fields.split(',').map((f) => f.trim()).filter(Boolean),
-    });
+    run(goalBody());
+  };
+
+  const goalBody = () => ({
+    goal: goal.trim(),
+    output_kind: kind,
+    output_fields: kind === 'action' ? [] : fields.split(',').map((f) => f.trim()).filter(Boolean),
+  });
+
+  const togglePreview = async () => {
+    if (preview) { setPreview(null); return; }
+    try { setPreview(await post(`/flows/${flow.id}/ai-preview`, goalBody())); } catch (e: any) { setError(e.message); }
   };
 
   const refine = () => {
@@ -140,12 +149,32 @@ export function BuildWithAI({ ctx, flow: initial, onDone, onCancel, onRecordMore
               <input className="input" value={fields} onChange={(e) => setFields(e.target.value)} placeholder="e.g. name, price, url, stock" />
             </label>
           )}
+          <div className="card compact" style={privateMode ? { borderColor: 'color-mix(in srgb, var(--ok) 45%, transparent)' } : undefined}>
+            <div className="row">
+              {privateMode ? <Lock size={15} color="var(--ok)" /> : <Unlock size={15} color="var(--warn)" />}
+              <div className="grow small">
+                {privateMode
+                  ? <><b>Private mode:</b> the AI reads the page&apos;s code (structure, field names, headers, buttons). Every value is masked, e.g. “John 2024” → “Xxxx 9999”.</>
+                  : <><b>Private mode is off:</b> sample rows and texts you picked are sent to the AI.</>}
+              </div>
+            </div>
+            <div className="row">
+              <button className="btn sm" onClick={togglePreview}><Eye size={13} /> {preview ? 'Hide preview' : 'Preview what the AI will see'}</button>
+              <button className="btn sm" onClick={() => ctx.openPanel('settings')}>Change</button>
+            </div>
+            {preview && (
+              <>
+                <pre className="mono" style={{ maxHeight: 280, overflow: 'auto', margin: 0, padding: 8, background: 'var(--input-bg)', borderRadius: 10, whiteSpace: 'pre-wrap', userSelect: 'text' }}>{preview.text}</pre>
+                <div className="small muted">{preview.chars.toLocaleString()} characters · exactly this is sent, plus the instructions for the AI.</div>
+              </>
+            )}
+          </div>
           {error && <div className="card compact small row" style={{ color: 'var(--rec)' }}><AlertTriangle size={14} />{error}</div>}
         </div>
         <footer>
           {c?.understanding && <button className="btn" onClick={() => setStage('review')}>See last build</button>}
           <button className="btn primary block" onClick={build}><Wand2 size={15} /> Build automation</button>
-          <div className="small muted" style={{ textAlign: 'center' }}>Passwords and 2FA codes are never sent to the AI.</div>
+          <div className="small muted" style={{ textAlign: 'center' }}>Passwords and 2FA codes are never sent to the AI{privateMode ? ', and neither is page data' : ''}.</div>
         </footer>
       </>
     );

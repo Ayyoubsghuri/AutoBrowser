@@ -207,8 +207,10 @@ class Runner {
   }
 
   async snapshot(ctx, withScreenshot = true) {
-    const snap = await frameCall(ctx.wc.mainFrame, 'snapshot');
-    if (withScreenshot) {
+    // Private mode: the AI gets the page's code outline with every value masked, and no screenshot.
+    const privateMode = !!(this.deps.privacy && this.deps.privacy());
+    const snap = await frameCall(ctx.wc.mainFrame, 'snapshot', { privateMode });
+    if (withScreenshot && !privateMode) {
       try {
         const img = await ctx.wc.capturePage();
         const size = img.getSize();
@@ -456,7 +458,9 @@ class Runner {
   }
 
   async aiStep(ctx, step) {
-    const instruction = render(step.instruction || step.tip || '', ctx.vars);
+    const privateMode = !!(this.deps.privacy && this.deps.privacy());
+    // private mode: keep {{row.x}} placeholders in the instruction; real values are filled in locally when typing
+    const instruction = privateMode ? (step.instruction || step.tip || '') : render(step.instruction || step.tip || '', ctx.vars);
     ctx.log('info', `AI: ${instruction}`, step.id);
     const history = [];
     const frame = ctx.wc.mainFrame;

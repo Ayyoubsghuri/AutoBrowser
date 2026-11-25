@@ -449,6 +449,7 @@ app.whenReady().then(async () => {
     api,
     emit: sendUI,
     speed: () => Number(settings.human_speed) || 1,
+    privacy: () => settings.privacy_mode !== false,
   });
   await createWindow();
 });

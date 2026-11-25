@@ -148,6 +148,7 @@ class SettingsIn(BaseModel):
     openai_base_url: Optional[str] = None  # optional: any OpenAI-compatible server
     human_speed: Optional[float] = None    # 0.5 = faster, 2 = slower
     stealth: Optional[bool] = None
+    privacy_mode: Optional[bool] = None    # AI reads page code, never page data
 
 
 class ElementInfo(BaseModel):

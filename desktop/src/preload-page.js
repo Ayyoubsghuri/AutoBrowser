@@ -311,6 +311,95 @@ function describeTable(container, kind, rowSelector) {
   return { rows, columns };
 }
 
+// ---------------------------------------------------------------- code-only page outline
+// "What the AI may see" in private mode: the page's structure (tags, ids, classes,
+// names, roles, field labels, column headers, button captions) with every piece of
+// data replaced by its *shape*:  "John Smith 2024-05-01" -> "Xxxx Xxxxx 9999-99-99".
+function maskText(s, max = 40) {
+  s = clean(s);
+  if (!s) return '';
+  const m = s.replace(/\p{Nd}|\p{L}/gu, (c) => (/\p{Nd}/u.test(c) ? '9' : /\p{Lu}/u.test(c) ? 'X' : 'x'));
+  return m.length > max ? `${m.slice(0, max)}…(${s.length})` : m;
+}
+const maskUrl = (u) => {
+  if (!u) return u;
+  try {
+    const x = new URL(u, location.href);
+    const path = x.pathname.replace(/\d+/g, '9').replace(/[^/]{24,}/g, '…');
+    const q = [...x.searchParams.keys()].map((k) => `${k}=…`).join('&');
+    return `${x.origin}${path}${q ? `?${q}` : ''}`;
+  } catch { return maskText(u); }
+};
+
+// Captions that are part of the site's UI, not its data.
+function isUiText(el) {
+  const tag = el.tagName;
+  if (['TH', 'LABEL', 'LEGEND', 'OPTGROUP', 'CAPTION'].includes(tag)) return true;
+  if (tag === 'BUTTON' || el.getAttribute('role') === 'button' || (tag === 'INPUT' && /submit|button|reset/.test(el.type))) {
+    return !el.closest('tbody, [role=row], li li'); // buttons inside data rows may carry data
+  }
+  if (tag === 'A' && el.closest('nav, header, footer, [role=navigation], .pagination, [aria-label*=pagination i]')) return true;
+  return false;
+}
+
+const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG', 'PATH', 'TEMPLATE', 'LINK', 'META', 'IFRAME', 'CANVAS', 'VIDEO', 'AUDIO', 'PICTURE', 'SOURCE', 'BR', 'HR', 'WBR']);
+const KEEP_ATTRS = ['name', 'type', 'role', 'data-testid', 'data-test', 'data-qa', 'data-cy', 'for', 'autocomplete', 'method', 'action'];
+
+function ownText(el) {
+  let t = '';
+  for (const n of el.childNodes) if (n.nodeType === 3) t += n.nodeValue;
+  return clean(t);
+}
+
+function describeEl(el, privateMode) {
+  const tag = el.tagName.toLowerCase();
+  let d = tag;
+  if (el.id) d += `#${looksDynamic(el.id) ? el.id.replace(/\d+/g, '9') : el.id}`;
+  const cls = Array.from(el.classList).filter((c) => !looksDynamic(c)).slice(0, 3);
+  if (cls.length) d += `.${cls.join('.')}`;
+  const attrs = [];
+  for (const a of KEEP_ATTRS) { const v = el.getAttribute(a); if (v) attrs.push(`${a}="${a === 'action' ? maskUrl(v) : short(v, 40)}"`); }
+  const ph = el.getAttribute('placeholder'); if (ph) attrs.push(`placeholder="${short(ph, 40)}"`);
+  const al = el.getAttribute('aria-label');
+  if (al) attrs.push(`aria-label="${isUiText(el) || /^(INPUT|SELECT|TEXTAREA|NAV)$/.test(el.tagName) ? short(al, 40) : maskText(al)}"`);
+  if (tag === 'a' && el.getAttribute('href')) attrs.push(`href="${maskUrl(el.getAttribute('href'))}"`);
+  if (/^(input|textarea)$/.test(tag) && el.value && el.type !== 'password') attrs.push(`value="${privateMode ? maskText(el.value) : short(el.value, 40)}"`);
+  if (el.disabled) attrs.push('disabled');
+  let line = `<${d}${attrs.length ? ' ' + attrs.join(' ') : ''}>`;
+  const t = ownText(el) || (tag === 'option' ? clean(el.text) : '');
+  if (t) line += ` "${isUiText(el) ? short(t, 40) : privateMode ? maskText(t) : short(t, 60)}"`;
+  return line;
+}
+
+const sig = (el) => `${el.tagName}.${el.classList[0] || ''}`;
+
+function pageOutline({ privateMode = true, maxLines = 500 } = {}) {
+  const lines = [`URL: ${maskUrl(location.href)}`, `TITLE: ${privateMode ? maskText(document.title, 60) : document.title}`];
+  const walk = (el, depth) => {
+    if (lines.length >= maxLines || SKIP.has(el.tagName)) return;
+    if (el.nodeType !== 1 || (el.checkVisibility && !el.checkVisibility()) ) return;
+    const kids = Array.from(el.children);
+    // skip pure wrappers (one child, no text, no identifying attributes)
+    const wrapper = kids.length === 1 && !ownText(el) && !el.id && !el.getAttribute('role') && !el.getAttribute('name') && !/^(FORM|TABLE|TBODY|THEAD|TR|UL|OL|SELECT|NAV|MAIN)$/.test(el.tagName);
+    if (!wrapper) lines.push(`${'  '.repeat(Math.min(depth, 12))}${describeEl(el, privateMode)}`);
+    const d = wrapper ? depth : depth + 1;
+    for (let i = 0; i < kids.length; i++) {
+      // collapse long runs of similar siblings (table rows, list items, cards)
+      let j = i;
+      while (j + 1 < kids.length && sig(kids[j + 1]) === sig(kids[i])) j++;
+      const run = j - i + 1;
+      if (run > 3) {
+        walk(kids[i], d); walk(kids[i + 1], d);
+        lines.push(`${'  '.repeat(Math.min(d, 12))}… ${run - 2} more <${kids[i].tagName.toLowerCase()}${kids[i].classList[0] ? '.' + kids[i].classList[0] : ''}> like the ones above`);
+        i = j;
+      } else walk(kids[i], d);
+    }
+  };
+  if (document.body) walk(document.body, 0);
+  if (lines.length >= maxLines) lines.push('… (outline truncated)');
+  return lines.join('\n');
+}
+
 // ---------------------------------------------------------------- 2. recorder
 let mode = 'off';
 let overlay = null;
@@ -344,9 +433,14 @@ function showBox(el, label) {
   overlay.tag.textContent = label;
 }
 
+let outlineSent = false;
 function emit(step) {
   step.ts = Date.now();
   step.url = step.url || location.href;
+  if (step.type !== 'notice' && (!outlineSent || step.type === 'extract_table')) {
+    // masked structure of this page, so the AI build can read the page's code without its data
+    try { step.page_outline = pageOutline({ privateMode: true, maxLines: step.type === 'extract_table' ? 500 : 300 }); outlineSent = true; } catch {}
+  }
   ipcRenderer.send('rec:step', step);
 }
 
@@ -571,25 +665,28 @@ const commands = {
       totp: otp ? buildTarget(otp) : null,
     };
   },
-  snapshot() {
+  snapshot({ privateMode = false } = {}) {
     snapshotEls = interactive().slice(0, 400);
+    const txt = (el, n) => (privateMode && !isUiText(el) ? maskText(el.innerText, n) : short(el.innerText, n)) || undefined;
     return {
-      url: location.href,
-      title: document.title,
+      url: privateMode ? maskUrl(location.href) : location.href,
+      title: privateMode ? maskText(document.title, 60) : document.title,
       elements: snapshotEls.map((el, index) => ({
         index,
         tag: el.tagName.toLowerCase(),
-        text: short(el.innerText, 100) || undefined,
+        text: txt(el, 100),
         role: el.getAttribute('role') || undefined,
         label: labelOf(el) || undefined,
         placeholder: el.getAttribute('placeholder') || undefined,
-        href: el.tagName === 'A' ? short(el.getAttribute('href'), 120) : undefined,
+        href: el.tagName === 'A' ? (privateMode ? maskUrl(el.getAttribute('href')) : short(el.getAttribute('href'), 120)) : undefined,
         type: el.getAttribute('type') || undefined,
-        value: el.type === 'password' ? undefined : (short(el.value, 60) || undefined),
+        value: el.type === 'password' ? undefined : ((privateMode ? maskText(el.value) : short(el.value, 60)) || undefined),
       })),
-      text_excerpt: short(document.body ? document.body.innerText : '', 6000),
+      // private mode: the page's code outline instead of its visible text
+      text_excerpt: privateMode ? pageOutline({ privateMode: true, maxLines: 250 }) : short(document.body ? document.body.innerText : '', 6000),
     };
   },
+  outline({ privateMode = true } = {}) { return pageOutline({ privateMode }); },
   async rectOfIndex({ index }) {
     const el = snapshotEls[index];
     if (!el || !el.isConnected) return { found: false };

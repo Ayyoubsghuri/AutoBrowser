@@ -109,6 +109,11 @@ function screen(name) {
     const table = steps.find((s) => s.type === 'extract_table');
     check(table && table.target.columns.join() === 'Order,Customer,Total' && table.target.sample.length === 3, 'table picked with headers + sample');
     check(!steps.some((s) => s.type === 'goto' && /orders/.test(s.url)), 'navigations caused by clicks are not separate steps');
+    const outline = table && table.page_outline || '';
+    if (process.env.AB_DEBUG) console.log('OUTLINE>>>\n' + outline + '\n<<<');
+    check(outline.includes('<table#orders>') && outline.includes('"Customer"') && outline.includes('more <tr>'), 'page code outline captured (structure + headers, repeated rows collapsed)');
+    const REAL = /Customer \d|#100\d|\$(7\.50|15\.00|22\.50|30\.00)|alice/;
+    check(!REAL.test(outline) && outline.includes('"Xxxxxxxx 9"') && outline.includes('"$99.99"'), 'page outline masks every data value by shape');
 
     // ---------------------------------------------------- account + saved flow (via backend API)
     const ids = await ui.evaluate(async ({ steps, base }) => {
@@ -212,6 +217,14 @@ function screen(name) {
     await ui.waitForSelector('text=What are you trying to do?');
     check(await ui.inputValue('input[placeholder^="e.g. name"]') === 'Order, Customer, Total', 'output fields prefilled from the picked table');
     await ui.fill('textarea', 'Export every order from all pages as CSV, for each of my accounts');
+    await ui.click('button:has-text("Preview what the AI will see")');
+    const sentText = await ui.textContent('pre');
+    if (process.env.AB_DEBUG) console.log('LEAKS>>>', sentText.split('\n').filter((l) => REAL.test(l) || /s3cret/.test(l)).join('\n'));
+    check(sentText.includes('<table#orders>') && sentText.includes('tbody > tr') && sentText.includes('Export every order'), 'AI preview contains the page code and the goal');
+    check(!/alice@shop\.test|s3cret/.test(sentText) && !REAL.test(sentText), 'AI preview contains no page data or credentials (private mode)');
+    await sleep(200);
+    screen('05b-ai-preview');
+    await ui.click('button:has-text("Hide preview")');
     await sleep(200);
     screen('05-goal');
     await ui.click('button:has-text("Build automation")');
