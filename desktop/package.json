@@ -1,7 +1,7 @@
 {
   "name": "autobrowser",
   "productName": "AutoBrowser",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Record-and-replay browser automation with optional AI",
   "main": "src/main.js",
   "license": "UNLICENSED",
