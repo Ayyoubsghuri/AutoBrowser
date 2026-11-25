@@ -2,7 +2,7 @@
 # which electron-builder copies into the app's resources/backend.
 from PyInstaller.utils.hooks import collect_submodules
 
-hidden = collect_submodules("uvicorn") + collect_submodules("anthropic") + ["pyotp"]
+hidden = collect_submodules("uvicorn") + collect_submodules("anthropic") + collect_submodules("openai") + ["pyotp"]
 
 a = Analysis(["run.py"], pathex=["."], hiddenimports=hidden, excludes=["tkinter", "pytest"], noarchive=False)
 pyz = PYZ(a.pure)

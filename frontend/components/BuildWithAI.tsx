@@ -61,7 +61,7 @@ export function BuildWithAI({ ctx, flow: initial, onDone, onCancel, onRecordMore
 
   const run = async (body: Record<string, unknown>) => {
     if (!ctx.settings?.has_api_key) {
-      ctx.toast('Add your Anthropic API key in Settings first', true);
+      ctx.toast('Add an AI API key (Claude, OpenAI or NVIDIA) in Settings first', true);
       ctx.openPanel('settings');
       return;
     }
@@ -159,7 +159,7 @@ export function BuildWithAI({ ctx, flow: initial, onDone, onCancel, onRecordMore
         <div className="body">
           <div className="empty" style={{ paddingTop: 80 }}>
             <div className="big"><Loader2 size={26} className="spin" /></div>
-            <b style={{ color: 'var(--ink)' }}>Claude is reading your recording…</b>
+            <b style={{ color: 'var(--ink)' }}>The AI is reading your recording…</b>
             Comparing it with your goal, generalising steps and planning the output. This can take up to a minute.
           </div>
         </div>

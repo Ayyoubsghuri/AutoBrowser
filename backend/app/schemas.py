@@ -137,9 +137,16 @@ class RunPatch(BaseModel):
 
 
 class SettingsIn(BaseModel):
+    provider: Optional[Literal["anthropic", "openai", "nvidia"]] = None
     anthropic_api_key: Optional[str] = None
-    model: Optional[str] = None
-    human_speed: Optional[float] = None   # 0.5 = faster, 2 = slower
+    openai_api_key: Optional[str] = None
+    nvidia_api_key: Optional[str] = None
+    model: Optional[str] = None            # model for the active (or given) provider
+    anthropic_model: Optional[str] = None
+    openai_model: Optional[str] = None
+    nvidia_model: Optional[str] = None
+    openai_base_url: Optional[str] = None  # optional: any OpenAI-compatible server
+    human_speed: Optional[float] = None    # 0.5 = faster, 2 = slower
     stealth: Optional[bool] = None
 
 

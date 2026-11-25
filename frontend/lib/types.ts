@@ -72,7 +72,15 @@ export type Run = {
   started: number; finished: number | null;
 };
 
-export type Settings = { has_api_key: boolean; model: string; human_speed: number; stealth: boolean };
+export type ProviderInfo = { has_key: boolean; model: string; base_url?: string };
+export type Settings = {
+  provider: 'anthropic' | 'openai' | 'nvidia';
+  has_api_key: boolean; // for the active provider
+  model: string;
+  providers: Record<'anthropic' | 'openai' | 'nvidia', ProviderInfo>;
+  human_speed: number;
+  stealth: boolean;
+};
 
 export type RunMode = 'exact' | 'assist' | 'compiled';
 

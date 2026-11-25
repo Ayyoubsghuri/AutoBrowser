@@ -32,7 +32,7 @@ export function FlowsPanel({ ctx, onClose, onEdit }: { ctx: AppCtx; onClose: () 
 
   const run = async () => {
     if (!flow) return;
-    if (mode !== 'exact' && !ctx.settings?.has_api_key) { ctx.toast('This mode needs an Anthropic API key (Settings)', true); return; }
+    if (mode !== 'exact' && !ctx.settings?.has_api_key) { ctx.toast('This mode needs an AI API key (Settings)', true); return; }
     if (mode === 'compiled' && !flow.compiled) { ctx.toast('Build with AI first', true); return; }
     setBusy('run');
     ctx.openPanel('runs');

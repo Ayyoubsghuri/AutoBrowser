@@ -167,6 +167,18 @@ function screen(name) {
     await ui.fill('input[placeholder="sk-ant-…"]', 'sk-ant-test');
     await ui.click('button:has-text("Save")');
     await ui.waitForSelector('.tag:has-text("key saved")');
+    // switch provider: NVIDIA has no key yet, then save one and pick a model
+    await ui.click('.segmented button:has-text("NVIDIA")');
+    await ui.waitForSelector('.tag:has-text("not set")');
+    await ui.fill('input[placeholder="nvapi-…"]', 'nvapi-test');
+    await ui.click('button:has-text("Save")');
+    await ui.waitForSelector('.tag:has-text("key saved")');
+    check(await ui.inputValue('input[list="models-nvidia"]') === 'meta/llama-3.3-70b-instruct', 'NVIDIA default model shown');
+    await sleep(300);
+    screen('05a-settings-nvidia');
+    await ui.click('.segmented button:has-text("Claude")');
+    await ui.waitForSelector('input[list="models-anthropic"]');
+    check(await ui.inputValue('input[list="models-anthropic"]') === 'claude-opus-5-5', 'switching back keeps the Claude model and key');
     const compileBodies = [];
     await ui.route('**/flows/*/compile', async (route) => {
       const body = JSON.parse(route.request().postData() || '{}');

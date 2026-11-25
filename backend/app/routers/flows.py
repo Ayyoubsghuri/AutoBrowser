@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import anthropic
+import openai
 from fastapi import APIRouter, HTTPException
 
 from .. import ai, db
@@ -71,6 +73,14 @@ def compile_flow(fid: str, body: CompileIn | None = None):
                                    output_fields=body.output_fields, feedback=(body.feedback or "").strip() or None)
     except ai.AIUnavailable as e:
         raise HTTPException(400, str(e))
+    except (anthropic.AuthenticationError, openai.AuthenticationError):
+        raise HTTPException(401, "The AI API key is invalid.")
+    except (anthropic.RateLimitError, openai.RateLimitError):
+        raise HTTPException(429, "AI rate limit hit, retry shortly.")
+    except (anthropic.APIConnectionError, openai.APIConnectionError):
+        raise HTTPException(503, "Could not reach the AI provider.")
+    except (anthropic.APIStatusError, openai.APIStatusError) as e:
+        raise HTTPException(502, f"AI provider error: {e.message}")
     except ValueError as e:
         raise HTTPException(502, f"AI returned an invalid flow: {e}")
     with db.tx() as c:

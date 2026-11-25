@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import anthropic
+import openai
 from fastapi import APIRouter, HTTPException
 
 from .. import ai, settings_store
@@ -14,14 +15,14 @@ def _wrap(fn, req):
         return fn(req)
     except ai.AIUnavailable as e:
         raise HTTPException(400, str(e))
-    except anthropic.AuthenticationError:
-        raise HTTPException(401, "Anthropic API key is invalid.")
-    except anthropic.RateLimitError:
-        raise HTTPException(429, "Anthropic rate limit hit, retry shortly.")
-    except anthropic.APIConnectionError:
-        raise HTTPException(503, "Could not reach the Anthropic API.")
-    except anthropic.APIStatusError as e:
-        raise HTTPException(502, f"Anthropic API error: {e.message}")
+    except (anthropic.AuthenticationError, openai.AuthenticationError):
+        raise HTTPException(401, "The AI API key is invalid.")
+    except (anthropic.RateLimitError, openai.RateLimitError):
+        raise HTTPException(429, "AI rate limit hit, retry shortly.")
+    except (anthropic.APIConnectionError, openai.APIConnectionError):
+        raise HTTPException(503, "Could not reach the AI provider.")
+    except (anthropic.APIStatusError, openai.APIStatusError) as e:
+        raise HTTPException(502, f"AI provider error: {e.message}")
 
 
 @router.post("/ai/act")

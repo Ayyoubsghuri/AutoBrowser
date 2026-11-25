@@ -1,30 +1,55 @@
-"""Claude-powered pieces. Every function here is optional: flows replay
-without any AI. The API key is stored encrypted in the local vault."""
+"""AI pieces (Claude, OpenAI or NVIDIA). Every function here is optional: flows
+replay without any AI. API keys are stored encrypted in the local vault."""
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import anthropic
+import openai
 
 from . import settings_store
 from .schemas import ActRequest, LocateRequest, Step
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+PROVIDER_NAMES = {"anthropic": "Anthropic (Claude)", "openai": "OpenAI", "nvidia": "NVIDIA"}
 
 
 class AIUnavailable(RuntimeError):
     pass
 
 
-def _client() -> tuple[anthropic.Anthropic, str]:
-    key = settings_store.get_api_key()
+def _key_or_fail(provider: str) -> str:
+    key = settings_store.get_api_key(provider)
     if not key:
-        raise AIUnavailable("No Anthropic API key configured (Settings → AI).")
-    return anthropic.Anthropic(api_key=key, max_retries=3), settings_store.get_model()
+        raise AIUnavailable(f"No {PROVIDER_NAMES[provider]} API key configured (Settings → AI).")
+    return key
+
+
+def _client() -> tuple[anthropic.Anthropic, str]:
+    key = _key_or_fail("anthropic")
+    return anthropic.Anthropic(api_key=key, max_retries=3), settings_store.get_model("anthropic")
+
+
+def _openai_client(provider: str) -> tuple[openai.OpenAI, str]:
+    key = _key_or_fail(provider)
+    return (
+        openai.OpenAI(api_key=key, base_url=settings_store.get_base_url(provider), max_retries=3, timeout=600),
+        settings_store.get_model(provider),
+    )
 
 
 def _call_json(system: str, content: list[dict[str, Any]], schema: dict[str, Any], effort: str, max_tokens: int = 16000) -> dict[str, Any]:
+    provider = settings_store.get_provider()
+    if provider == "anthropic":
+        return _call_anthropic(system, content, schema, effort, max_tokens)
+    return _call_openai_compatible(provider, system, content, schema, effort, max_tokens)
+
+
+# --------------------------------------------------------------------------- Claude
+
+def _call_anthropic(system, content, schema, effort, max_tokens) -> dict[str, Any]:
     client, model = _client()
     kwargs: dict[str, Any] = dict(
         model=model,
@@ -47,6 +72,88 @@ def _call_json(system: str, content: list[dict[str, Any]], schema: dict[str, Any
     if text is None:
         raise AIUnavailable("Empty AI response.")
     return json.loads(text)
+
+
+# --------------------------------------------------------------------------- OpenAI / NVIDIA
+
+def _to_openai_content(content: list[dict[str, Any]], images: bool) -> list[dict[str, Any]] | str:
+    parts: list[dict[str, Any]] = []
+    for b in content:
+        if b["type"] == "text":
+            parts.append({"type": "text", "text": b["text"]})
+        elif b["type"] == "image" and images:
+            src = b["source"]
+            parts.append({"type": "image_url", "image_url": {"url": f"data:{src['media_type']};base64,{src['data']}"}})
+    if all(p["type"] == "text" for p in parts):
+        return "\n\n".join(p["text"] for p in parts)
+    return parts
+
+
+def _vision_model(model: str) -> bool:
+    return bool(re.search(r"vision|vl\b|-vl|llava|gemma-3|phi-4-multimodal|nemotron-nano-vl|maverick|scout", model, re.I))
+
+
+def parse_json_text(text: str) -> dict[str, Any]:
+    """Lenient JSON extraction for models without strict structured output."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
+    if fence:
+        text = fence.group(1).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start >= 0 and end > start:
+            return json.loads(text[start:end + 1])
+        raise
+
+
+def _call_openai_compatible(provider, system, content, schema, effort, max_tokens) -> dict[str, Any]:
+    client, model = _openai_client(provider)
+    strict = provider == "openai"
+    sys_text = system
+    if not strict:
+        # NVIDIA-hosted models: no strict schema enforcement, so spell the schema out.
+        sys_text += ("\n\nReply with ONLY one JSON object (no prose, no code fences) that matches this JSON schema:\n"
+                     + json.dumps(schema))
+    images = provider == "openai" or _vision_model(model)
+    kwargs: dict[str, Any] = dict(
+        model=model,
+        messages=[{"role": "system", "content": sys_text},
+                  {"role": "user", "content": _to_openai_content(content, images)}],
+    )
+    if strict:
+        kwargs["response_format"] = {"type": "json_schema", "json_schema": {"name": "result", "schema": schema, "strict": True}}
+        kwargs["max_completion_tokens"] = max_tokens
+        if re.match(r"(gpt-5|o\d)", model):
+            kwargs["reasoning_effort"] = {"low": "low", "medium": "medium"}.get(effort, "high")
+    else:
+        kwargs["response_format"] = {"type": "json_object"}
+        kwargs["max_tokens"] = min(max_tokens, 16000)
+    try:
+        resp = client.chat.completions.create(**kwargs)
+    except openai.BadRequestError:
+        if not strict and "response_format" in kwargs:
+            kwargs.pop("response_format")  # some hosted models reject json mode; the prompt still asks for JSON
+            resp = client.chat.completions.create(**kwargs)
+        else:
+            raise
+    choice = resp.choices[0]
+    msg = choice.message
+    if getattr(msg, "refusal", None) or choice.finish_reason == "content_filter":
+        raise AIUnavailable("The model declined this request.")
+    if choice.finish_reason == "length":
+        raise AIUnavailable("AI response was cut off (token limit). Try a shorter flow or another model.")
+    if not msg.content:
+        raise AIUnavailable("Empty AI response.")
+    try:
+        data = parse_json_text(msg.content)
+    except json.JSONDecodeError:
+        raise AIUnavailable(f"{model} did not return valid JSON. Try a stronger model.")
+    missing = [k for k in schema.get("required", []) if k not in data]
+    if missing:
+        raise AIUnavailable(f"{model} returned an incomplete answer (missing {', '.join(missing)}). Try a stronger model.")
+    return data
 
 
 # --------------------------------------------------------------------------- compile
@@ -184,7 +291,8 @@ def compile_flow(
         effort="high",
         max_tokens=32000,
     )
-    raw_steps = json.loads(result["steps_json"])
+    raw = result["steps_json"]
+    raw_steps = raw if isinstance(raw, list) else json.loads(raw)
     steps = [Step.model_validate(s).model_dump(exclude_none=True) for s in raw_steps]
     return {
         "goal": goal,

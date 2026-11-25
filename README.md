@@ -16,7 +16,7 @@ Replay it exactly with no AI, or let Claude turn it into a smarter automation
 ┌──────────────▼──────────────┐
 │ FastAPI backend (bundled)   │  SQLite: flows, runs, accounts
 │ Encrypted vault (Fernet)    │  passwords, 2FA secrets, API key
-│ Claude: build flow / AI     │  optional
+│ AI: Claude / OpenAI / NVIDIA│  optional
 │ steps / self-healing        │
 └─────────────────────────────┘
 ```
@@ -37,13 +37,24 @@ Replay it exactly with no AI, or let Claude turn it into a smarter automation
    *"pick the newest order"*, *"type today's date"*.
 4. **Save** or **Save & build with AI**. Then, under **Flows**, pick the accounts to run as and a mode:
 
-| Mode | What runs | Needs API key |
+| Mode | What runs | Needs an AI key |
 |---|---|---|
 | **Exact** | your recording, step by step | no |
 | **AI assist** | your recording; steps with a tip are done by the AI agent; broken selectors are re-found by AI | yes |
 | **AI-built** | the flow Claude built from your recording and tips (loops, login, pagination, variables) | only for its `ai` steps |
 
 Results (tables, text) are listed under **Runs** and can be exported as CSV or JSON.
+
+### AI providers
+Pick one in **Settings → AI**; each keeps its own encrypted key and model:
+
+| Provider | Key from | Default model | Notes |
+|---|---|---|---|
+| **Claude** (Anthropic) | console.anthropic.com | `claude-opus-5-5` | strict JSON output, screenshots |
+| **OpenAI** | platform.openai.com | `gpt-5` | strict JSON output, screenshots; optional server URL for any OpenAI-compatible API (OpenRouter, Ollama, LM Studio…) |
+| **NVIDIA** | build.nvidia.com | `meta/llama-3.3-70b-instruct` | hosted NIM models; screenshots only sent to vision models; weaker models may fail on large flows |
+
+You can type any model id your account can use.
 
 ### Templates you can use in values
 `{{account.username}}` `{{account.password}}` `{{account.totp}}` `{{today}}` `{{now}}` `{{row.<column>}}` (inside a row loop) `{{vars.<name>}}` (results of earlier extract steps)
