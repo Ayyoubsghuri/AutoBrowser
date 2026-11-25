@@ -74,15 +74,62 @@ Input: the steps a user recorded by clicking around a website, in order. Each st
 Allowed step types: goto, click, type, select, press, scroll, wait, extract_table, extract_text, login, loop, if, ai.
 Every step needs a unique short `id`. Return `steps_json` as a JSON array string of steps matching the input step shape."""
 
+GOAL_RULES = """
+The user also told you their GOAL (why they recorded this) and what OUTPUT they want. The goal
+is the source of truth; the recording is evidence of how the site works.
+- Explain in `understanding` (2-4 sentences, plain words, second person) what you think they want.
+- Set `matches_goal` to false when the recording cannot achieve the goal as-is (e.g. they want
+  every page but only recorded one, want a field that was never picked, or skipped a step). Build
+  the best flow you can anyway: generalise with loops / ai steps where the recording shows enough.
+- `gaps`: what is missing or ambiguous that you could NOT fix yourself and the user should record
+  or clarify (e.g. "Pick the order date column - it was not captured"). Empty when nothing.
+- `suggestions`: 0-5 optional improvements the user can accept (e.g. "Repeat for all pages",
+  "Skip orders already exported", "Also capture the tracking number"). Each needs a short
+  `title`, a one-sentence `detail`, and `instruction` = what you would change, written so it can be
+  sent back to you verbatim. Do NOT apply suggestions in the steps; they are opt-in.
+- `output_fields`: the columns/values the run will produce. For scraping goals, make the extract
+  steps produce exactly these (name extract steps after the dataset, e.g. `orders`). For pure
+  action goals, list what is worth reporting (e.g. `status`), possibly empty.
+- `output_kind`: "data" (scraping), "action" (doing something), or "both".
+When FEEDBACK and a PREVIOUS BUILD are given, start from the previous build and apply the feedback;
+keep everything else stable."""
+
 COMPILE_SCHEMA = {
     "type": "object",
     "properties": {
         "summary": {"type": "string"},
+        "understanding": {"type": "string"},
+        "matches_goal": {"type": "boolean"},
+        "gaps": {"type": "array", "items": {"type": "string"}},
+        "suggestions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "detail": {"type": "string"},
+                    "instruction": {"type": "string"},
+                },
+                "required": ["title", "detail", "instruction"],
+                "additionalProperties": False,
+            },
+        },
+        "output_kind": {"type": "string", "enum": ["data", "action", "both"]},
+        "output_fields": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "description": {"type": "string"}},
+                "required": ["name", "description"],
+                "additionalProperties": False,
+            },
+        },
         "variables": {"type": "array", "items": {"type": "string"}},
         "warnings": {"type": "array", "items": {"type": "string"}},
         "steps_json": {"type": "string"},
     },
-    "required": ["summary", "variables", "warnings", "steps_json"],
+    "required": ["summary", "understanding", "matches_goal", "gaps", "suggestions", "output_kind",
+                 "output_fields", "variables", "warnings", "steps_json"],
     "additionalProperties": False,
 }
 
@@ -99,16 +146,40 @@ def _strip_secrets(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def compile_flow(flow: dict[str, Any]) -> dict[str, Any]:
+def compile_flow(
+    flow: dict[str, Any],
+    goal: str | None = None,
+    output_kind: str | None = None,
+    output_fields: list[str] | None = None,
+    feedback: str | None = None,
+) -> dict[str, Any]:
     payload = {
         "name": flow["name"],
         "start_url": flow.get("start_url"),
-        "description": flow.get("description"),
-        "steps": _strip_secrets(flow.get("steps") or []),
+        "recorded_steps": _strip_secrets(flow.get("steps") or []),
     }
+    goal = goal or flow.get("description")
+    parts = []
+    if goal:
+        parts.append(f"GOAL (in the user's words):\n{goal}")
+    if output_kind:
+        parts.append(f"OUTPUT the user wants: {output_kind}" + (f" - fields: {', '.join(output_fields)}" if output_fields else ""))
+    elif output_fields:
+        parts.append(f"OUTPUT fields the user wants: {', '.join(output_fields)}")
+    if not goal:
+        parts.append("No goal given: infer the most likely intent from the recording and say so in `understanding`.")
+    parts.append("RECORDING:\n" + json.dumps(payload, ensure_ascii=False, indent=1))
+    previous = flow.get("compiled")
+    if feedback and previous:
+        prev = {k: previous.get(k) for k in ("understanding", "output_fields", "steps")}
+        parts.append("PREVIOUS BUILD:\n" + json.dumps(prev, ensure_ascii=False, indent=1))
+        parts.append(f"FEEDBACK to apply:\n{feedback}")
+    elif feedback:
+        parts.append(f"Extra instructions from the user:\n{feedback}")
+
     result = _call_json(
-        COMPILE_SYSTEM,
-        [{"type": "text", "text": "Recorded flow:\n" + json.dumps(payload, ensure_ascii=False, indent=1)}],
+        COMPILE_SYSTEM + GOAL_RULES,
+        [{"type": "text", "text": "\n\n".join(parts)}],
         COMPILE_SCHEMA,
         effort="high",
         max_tokens=32000,
@@ -116,7 +187,14 @@ def compile_flow(flow: dict[str, Any]) -> dict[str, Any]:
     raw_steps = json.loads(result["steps_json"])
     steps = [Step.model_validate(s).model_dump(exclude_none=True) for s in raw_steps]
     return {
+        "goal": goal,
         "summary": result["summary"],
+        "understanding": result["understanding"],
+        "matches_goal": result["matches_goal"],
+        "gaps": result["gaps"],
+        "suggestions": result["suggestions"],
+        "output_kind": result["output_kind"],
+        "output_fields": result["output_fields"],
         "variables": result["variables"],
         "warnings": result["warnings"],
         "steps": steps,

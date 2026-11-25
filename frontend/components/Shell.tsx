@@ -25,6 +25,8 @@ export type AppCtx = {
   reloadSettings: () => Promise<void>;
   toast: (msg: string, error?: boolean) => void;
   openPanel: (p: PanelId) => void;
+  openFlow: (id: string) => void;
+  focusFlowId: string | null;
   activeTab: TabInfo | null;
 };
 
@@ -40,6 +42,7 @@ export default function Shell() {
   const [rec, setRec] = useState<{ recording: boolean; mode?: string; profileId?: string | null }>({ recording: false });
   const [steps, setSteps] = useState<Step[]>([]);
   const [editingFlow, setEditingFlow] = useState<Flow | null>(null);
+  const [focusFlowId, setFocusFlowId] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [flows, setFlows] = useState<Flow[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -148,6 +151,7 @@ export default function Shell() {
 
   const ctx: AppCtx = {
     profiles, flows, settings, reloadProfiles, reloadFlows, reloadSettings, toast, openPanel: setPanel, activeTab,
+    focusFlowId, openFlow: (id: string) => { setFocusFlowId(id); setPanel('flows'); },
   };
   const profileOf = (id: string | null | undefined) => profiles.find((p) => p.id === id);
   const runningCount = Object.values(running).filter((s) => s === 'running').length;
@@ -155,7 +159,7 @@ export default function Shell() {
 
   const RailBtn = ({ id, icon, tip, badge }: { id: Exclude<PanelId, null>; icon: React.ReactNode; tip: string; badge?: number }) => (
     <button className={`railbtn ${panel === id ? 'active' : ''} ${id === 'recorder' ? 'rec' : ''}`} data-tip={tip}
-      onClick={() => setPanel(panel === id ? null : id)} aria-label={tip}>
+      onClick={() => { if (id === 'flows') setFocusFlowId(null); setPanel(panel === id ? null : id); }} aria-label={tip}>
       {icon}
       {badge ? <span className="badge">{badge}</span> : null}
     </button>
@@ -244,7 +248,7 @@ export default function Shell() {
                 editingFlow={editingFlow} setEditingFlow={setEditingFlow} onClose={() => setPanel(null)} />
             )}
             {panel === 'flows' && (
-              <FlowsPanel ctx={ctx} onClose={() => setPanel(null)}
+              <FlowsPanel key={focusFlowId || 'flows'} ctx={ctx} onClose={() => setPanel(null)}
                 onEdit={(f) => { setEditingFlow(f); setSteps(f.steps); setPanel('recorder'); }} />
             )}
             {panel === 'accounts' && <AccountsPanel ctx={ctx} onClose={() => setPanel(null)} />}

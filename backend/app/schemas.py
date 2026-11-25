@@ -116,6 +116,13 @@ class CredentialPatch(BaseModel):
     extra: Optional[dict[str, str]] = None
 
 
+class CompileIn(BaseModel):
+    goal: Optional[str] = Field(default=None, description="Why the user recorded this / what they want done.")
+    output_kind: Optional[Literal["data", "action", "both"]] = None
+    output_fields: Optional[list[str]] = None
+    feedback: Optional[str] = Field(default=None, description="Changes to apply to the previous AI build.")
+
+
 class RunIn(BaseModel):
     flow_id: Optional[str] = None
     profile_id: Optional[str] = None

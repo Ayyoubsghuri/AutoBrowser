@@ -44,7 +44,7 @@ export type Flow = {
   start_url?: string | null;
   description?: string | null;
   steps: Step[];
-  compiled?: { summary: string; variables: string[]; warnings: string[]; steps: Step[] } | null;
+  compiled?: Compiled | null;
   created: number;
   updated: number;
 };
@@ -75,3 +75,20 @@ export type Run = {
 export type Settings = { has_api_key: boolean; model: string; human_speed: number; stealth: boolean };
 
 export type RunMode = 'exact' | 'assist' | 'compiled';
+
+export type Suggestion = { title: string; detail: string; instruction: string };
+export type OutputKind = 'data' | 'action' | 'both';
+
+export type Compiled = {
+  goal?: string | null;
+  summary: string;
+  understanding?: string;
+  matches_goal?: boolean;
+  gaps?: string[];
+  suggestions?: Suggestion[];
+  output_kind?: OutputKind;
+  output_fields?: { name: string; description: string }[];
+  variables: string[];
+  warnings: string[];
+  steps: Step[];
+};

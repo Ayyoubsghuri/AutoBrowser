@@ -161,14 +161,64 @@ function screen(name) {
     check(comp.status === 'success', 'compiled flow succeeded');
     check(rows.length === 12 && rows[11].Order === '#1012', `pagination loop collected all 12 rows (got ${rows.length})`);
 
-    // ---------------------------------------------------- UI panels screenshot
+    // ---------------------------------------------------- Build with AI: goal -> review -> refine
+    // The Claude call is intercepted here (no API key in CI); the backend logic is unit-tested.
+    await ui.click('.railbtn[data-tip="Settings & AI"]');
+    await ui.fill('input[placeholder="sk-ant-…"]', 'sk-ant-test');
+    await ui.click('button:has-text("Save")');
+    await ui.waitForSelector('.tag:has-text("key saved")');
+    const compileBodies = [];
+    await ui.route('**/flows/*/compile', async (route) => {
+      const body = JSON.parse(route.request().postData() || '{}');
+      compileBodies.push(body);
+      const refined = !!body.feedback;
+      const updated = {
+        ...flow,
+        description: body.goal || flow.description,
+        compiled: {
+          goal: 'Export every order from all pages as CSV',
+          summary: 'Login, then export the orders table on every page.',
+          understanding: 'You want to log in with each saved account and collect every order (number, customer, total) across all pages into one CSV.',
+          matches_goal: refined,
+          gaps: refined ? [] : ['You only recorded the first page; I added a loop over the "Next page" button.'],
+          suggestions: [
+            { title: 'Skip orders already exported', detail: 'Remember the last order number and stop there next time.', instruction: 'Stop when reaching an order number exported in a previous run' },
+            { title: 'Add the order link', detail: 'Save the URL of each order row.', instruction: 'Include the _link column in the output' },
+          ],
+          output_kind: 'data',
+          output_fields: [{ name: 'Order', description: 'Order number' }, { name: 'Customer', description: '' }, { name: 'Total', description: '' }],
+          variables: [], warnings: [],
+          steps: flow.compiled.steps,
+        },
+      };
+      await new Promise((r) => setTimeout(r, 600));
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(updated) });
+    });
     await ui.click('.railbtn[data-tip="Saved flows"]');
     await ui.click('.card:has-text("Export orders")');
-    await sleep(500);
-    screen('05-flows');
+    await ui.click('button:has-text("Review / rebuild")');
+    await ui.waitForSelector('text=What are you trying to do?');
+    check(await ui.inputValue('input[placeholder^="e.g. name"]') === 'Order, Customer, Total', 'output fields prefilled from the picked table');
+    await ui.fill('textarea', 'Export every order from all pages as CSV, for each of my accounts');
+    await sleep(200);
+    screen('05-goal');
+    await ui.click('button:has-text("Build automation")');
+    await ui.waitForSelector('text=What I understood');
+    check(compileBodies[0].goal.startsWith('Export every order') && compileBodies[0].output_kind === 'data' && compileBodies[0].output_fields.length === 3, 'goal, output kind and fields sent to the AI build');
+    await ui.click('.card:has-text("Add the order link")');
+    await ui.fill('textarea', 'Only orders above $10');
+    await sleep(200);
+    screen('06-review');
+    await ui.click('button:has-text("Apply 1 & rebuild")');
+    await ui.waitForSelector('.tag:has-text("matches your goal")');
+    check(/_link column/.test(compileBodies[1].feedback) && /above \$10/.test(compileBodies[1].feedback), 'picked suggestion + feedback sent as refinement');
+    await ui.click('button:has-text("Looks good")');
+    await ui.waitForSelector('text=AI build');
+    await sleep(400);
+    screen('07-flow-detail');
     await ui.click('.railbtn[data-tip="Accounts & logins"]');
     await sleep(400);
-    screen('06-accounts');
+    screen('08-accounts');
   } catch (e) {
     console.error(e);
     failures.push(String(e.message));

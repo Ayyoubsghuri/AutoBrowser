@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from .. import ai, db
-from ..schemas import FlowIn, FlowPatch
+from ..schemas import CompileIn, FlowIn, FlowPatch
 
 router = APIRouter(tags=["flows"])
 
@@ -58,10 +58,17 @@ def delete_flow(fid: str):
 
 
 @router.post("/flows/{fid}/compile")
-def compile_flow(fid: str):
+def compile_flow(fid: str, body: CompileIn | None = None):
     flow = _flow(fid)
+    body = body or CompileIn()
+    goal = (body.goal or "").strip() or None
+    if goal and goal != flow.get("description"):
+        with db.tx() as c:
+            c.execute("UPDATE flows SET description=? WHERE id=?", (goal, fid))
+        flow["description"] = goal
     try:
-        compiled = ai.compile_flow(flow)
+        compiled = ai.compile_flow(flow, goal=goal, output_kind=body.output_kind,
+                                   output_fields=body.output_fields, feedback=(body.feedback or "").strip() or None)
     except ai.AIUnavailable as e:
         raise HTTPException(400, str(e))
     except ValueError as e:

@@ -47,22 +47,50 @@ def test_compile_without_key(client):
     assert r.status_code == 400 and "API key" in r.json()["detail"]
 
 
-def test_compile_with_mocked_ai(client, monkeypatch):
+def _fake_result(**over):
+    r = {"summary": "loop rows", "understanding": "You want every order.", "matches_goal": False,
+         "gaps": ["Pick the date column"], "suggestions": [{"title": "All pages", "detail": "Repeat for every page.", "instruction": "Loop with next button"}],
+         "output_kind": "data", "output_fields": [{"name": "order", "description": "Order id"}],
+         "variables": [], "warnings": [],
+         "steps_json": json.dumps([{"id": "l1", "type": "loop", "loop": {"over": "rows", "selector": "tr"},
+                                    "steps": [{"id": "c1", "type": "click"}]}])}
+    r.update(over)
+    return r
+
+
+def test_compile_with_goal_and_feedback(client, monkeypatch):
     client.put("/settings", json={"anthropic_api_key": "sk-test"})
     assert client.get("/settings").json()["has_api_key"] is True
-    captured = {}
+    prompts = []
 
     def fake_call(system, content, schema, effort, max_tokens=16000):
-        captured["text"] = content[0]["text"]
-        return {"summary": "loop rows", "variables": [], "warnings": [],
-                "steps_json": json.dumps([{"id": "l1", "type": "loop", "loop": {"over": "rows", "selector": "tr"},
-                                           "steps": [{"id": "c1", "type": "click"}]}])}
+        prompts.append(content[0]["text"])
+        assert "GOAL" in system and "suggestions" in schema["properties"]
+        return _fake_result()
 
     monkeypatch.setattr(ai, "_call_json", fake_call)
     f = client.post("/flows", json={"name": "x", "steps": [{"id": "p", "type": "type", "secret": True, "value": "hunter2"}]}).json()
-    out = client.post(f"/flows/{f['id']}/compile").json()
-    assert out["compiled"]["steps"][0]["steps"][0]["type"] == "click"
-    assert "hunter2" not in captured["text"]  # secrets never reach the AI
+    out = client.post(f"/flows/{f['id']}/compile", json={"goal": "Export all orders to CSV", "output_kind": "data",
+                                                          "output_fields": ["order", "total"]}).json()
+    c = out["compiled"]
+    assert c["steps"][0]["steps"][0]["type"] == "click"
+    assert c["goal"] == "Export all orders to CSV" and c["matches_goal"] is False
+    assert c["suggestions"][0]["title"] == "All pages" and c["output_fields"][0]["name"] == "order"
+    assert out["description"] == "Export all orders to CSV"  # goal remembered on the flow
+    assert "Export all orders to CSV" in prompts[0] and "order, total" in prompts[0]
+    assert "hunter2" not in prompts[0]  # secrets never reach the AI
+
+    # refine: previous build + feedback are sent, goal is reused from the flow
+    client.post(f"/flows/{f['id']}/compile", json={"feedback": "Loop with next button"})
+    assert "PREVIOUS BUILD" in prompts[1] and "Loop with next button" in prompts[1] and "Export all orders" in prompts[1]
+
+
+def test_compile_without_body_still_works(client, monkeypatch):
+    client.put("/settings", json={"anthropic_api_key": "sk-test"})
+    monkeypatch.setattr(ai, "_call_json", lambda *a, **k: _fake_result())
+    f = client.post("/flows", json={"name": "x"}).json()
+    r = client.post(f"/flows/{f['id']}/compile")
+    assert r.status_code == 200 and r.json()["compiled"]["understanding"]
 
 
 def test_call_json_uses_fallbacks(monkeypatch):

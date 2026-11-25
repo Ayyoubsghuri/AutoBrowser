@@ -6,6 +6,7 @@ import { patch, post } from '@/lib/api';
 import type { Flow, Step } from '@/lib/types';
 import { uid } from '@/lib/steps';
 import { StepCard } from './StepCard';
+import { BuildWithAI } from './BuildWithAI';
 import type { AppCtx } from './Shell';
 
 export function RecorderPanel({ ctx, rec, steps, setSteps, editingFlow, setEditingFlow, onClose }: {
@@ -20,6 +21,7 @@ export function RecorderPanel({ ctx, rec, steps, setSteps, editingFlow, setEditi
   const b = bridge();
   const [name, setName] = useState(editingFlow?.name || '');
   const [busy, setBusy] = useState<string | null>(null);
+  const [buildFlow, setBuildFlow] = useState<Flow | null>(null);
 
   const mode = rec.recording ? rec.mode || 'record' : 'off';
   const setMode = (m: string) => b.recorder.setMode(mode === m ? 'record' : m);
@@ -45,13 +47,9 @@ export function RecorderPanel({ ctx, rec, steps, setSteps, editingFlow, setEditi
       let flow: Flow = editingFlow ? await patch(`/flows/${editingFlow.id}`, body) : await post('/flows', body);
       setEditingFlow(flow);
       ctx.toast(`Saved "${flow.name}"`);
-      if (build) {
-        if (!ctx.settings?.has_api_key) { ctx.toast('Add your Anthropic API key in Settings to build with AI', true); ctx.openPanel('settings'); return; }
-        flow = await post(`/flows/${flow.id}/compile`);
-        ctx.toast('AI built the automation ✓');
-      }
       await ctx.reloadFlows();
-      if (build) ctx.openPanel('flows');
+      // ask for the goal next, then let the AI build + review
+      if (build) setBuildFlow(flow);
     } catch (e: any) {
       ctx.toast(e.message, true);
     } finally { setBusy(null); }
@@ -61,6 +59,15 @@ export function RecorderPanel({ ctx, rec, steps, setSteps, editingFlow, setEditi
     if (steps.length && !confirm('Clear all recorded steps?')) return;
     setSteps([]); setEditingFlow(null); setName('');
   };
+
+  if (buildFlow) {
+    return (
+      <BuildWithAI ctx={ctx} flow={buildFlow}
+        onCancel={() => setBuildFlow(null)}
+        onRecordMore={(f) => { setEditingFlow(f); setBuildFlow(null); if (ctx.activeTab?.url) b.recorder.start(ctx.activeTab.id); }}
+        onDone={(f) => { setBuildFlow(null); ctx.openFlow(f.id); }} />
+    );
+  }
 
   return (
     <>
@@ -114,7 +121,7 @@ export function RecorderPanel({ ctx, rec, steps, setSteps, editingFlow, setEditi
           <button className="btn" onClick={clear} title="Clear"><Eraser size={14} /></button>
           <button className="btn grow" disabled={!!busy} onClick={() => save(false)}><Save size={14} />{busy === 'save' ? 'Saving…' : 'Save'}</button>
           <button className="btn primary grow" disabled={!!busy} onClick={() => save(true)}>
-            <Sparkles size={14} />{busy === 'build' ? 'Building…' : 'Save & build with AI'}
+            <Sparkles size={14} />{busy === 'build' ? 'Saving…' : 'Save & build with AI'}
           </button>
         </div>
       </footer>

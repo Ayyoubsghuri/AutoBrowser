@@ -6,6 +6,7 @@ import { del, post } from '@/lib/api';
 import type { Flow, RunMode } from '@/lib/types';
 import { hostPath } from '@/lib/steps';
 import { StepCard } from './StepCard';
+import { BuildWithAI } from './BuildWithAI';
 import type { AppCtx } from './Shell';
 
 const MODES: { id: RunMode; label: string; hint: string }[] = [
@@ -16,8 +17,10 @@ const MODES: { id: RunMode; label: string; hint: string }[] = [
 
 export function FlowsPanel({ ctx, onClose, onEdit }: { ctx: AppCtx; onClose: () => void; onEdit: (f: Flow) => void }) {
   const b = bridge();
-  const [selId, setSelId] = useState<string | null>(null);
-  const [mode, setMode] = useState<RunMode>('exact');
+  const focused = ctx.flows.find((f) => f.id === ctx.focusFlowId);
+  const [selId, setSelId] = useState<string | null>(ctx.focusFlowId);
+  const [mode, setMode] = useState<RunMode>(focused?.compiled ? 'compiled' : 'exact');
+  const [building, setBuilding] = useState(false);
   const [accounts, setAccounts] = useState<(string | null)[]>([]);
   const [parallel, setParallel] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -38,14 +41,7 @@ export function FlowsPanel({ ctx, onClose, onEdit }: { ctx: AppCtx; onClose: () 
     finally { setBusy(null); }
   };
 
-  const build = async () => {
-    if (!flow) return;
-    if (!ctx.settings?.has_api_key) { ctx.toast('Add an Anthropic API key in Settings first', true); ctx.openPanel('settings'); return; }
-    setBusy('build');
-    try { await post(`/flows/${flow.id}/compile`); await ctx.reloadFlows(); setView('compiled'); ctx.toast('AI built the automation ✓'); }
-    catch (e: any) { ctx.toast(e.message, true); }
-    finally { setBusy(null); }
-  };
+  const build = () => { if (flow) setBuilding(true); };
 
   const remove = async () => {
     if (!flow || !confirm(`Delete "${flow.name}"?`)) return;
@@ -101,6 +97,15 @@ export function FlowsPanel({ ctx, onClose, onEdit }: { ctx: AppCtx; onClose: () 
     );
   }
 
+  if (building) {
+    return (
+      <BuildWithAI ctx={ctx} flow={flow}
+        onCancel={() => setBuilding(false)}
+        onRecordMore={(f) => { setBuilding(false); onEdit(f); }}
+        onDone={async () => { setBuilding(false); await ctx.reloadFlows(); setView('compiled'); setMode('compiled'); }} />
+    );
+  }
+
   const shown = view === 'compiled' && flow.compiled ? flow.compiled.steps : flow.steps;
   return (
     <>
@@ -141,11 +146,15 @@ export function FlowsPanel({ ctx, onClose, onEdit }: { ctx: AppCtx; onClose: () 
           <div className="row">
             <Sparkles size={16} color="var(--accent)" />
             <div className="grow title">AI build</div>
-            <button className="btn sm" onClick={build} disabled={busy === 'build'}>{busy === 'build' ? 'Building…' : flow.compiled ? 'Rebuild' : 'Build with AI'}</button>
+            <button className="btn sm" onClick={build}>{flow.compiled ? 'Review / rebuild' : 'Build with AI'}</button>
           </div>
           {flow.compiled ? (
             <>
-              <div className="small">{flow.compiled.summary}</div>
+              <div className="small">{flow.compiled.understanding || flow.compiled.summary}</div>
+              {flow.compiled.output_fields && flow.compiled.output_fields.length > 0 && (
+                <div className="row wrap" style={{ gap: 4 }}>{flow.compiled.output_fields.map((f) => <span key={f.name} className="tag ai" title={f.description}>{f.name}</span>)}</div>
+              )}
+              {flow.compiled.gaps?.map((g, i) => <div key={i} className="small row" style={{ color: 'var(--warn)' }}><AlertTriangle size={12} />{g}</div>)}
               {flow.compiled.warnings?.map((w, i) => <div key={i} className="small row" style={{ color: 'var(--warn)' }}><AlertTriangle size={12} />{w}</div>)}
             </>
           ) : (
