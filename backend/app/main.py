@@ -12,7 +12,7 @@ from .routers import ai_routes, data, flows, profiles, runs
 
 def create_app() -> FastAPI:
     db.connect()
-    app = FastAPI(title="AutoBrowser API", version="0.2.0")
+    app = FastAPI(title="AutoBrowser API", version="0.3.0")
 
     # The UI is served from app:// (packaged) or localhost:3000 (dev).
     app.add_middleware(
