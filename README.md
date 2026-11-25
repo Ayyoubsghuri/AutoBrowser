@@ -1,0 +1,100 @@
+# AutoBrowser
+
+A desktop browser (Windows `.exe`) that **learns automations from your clicks**.
+Open a website, press **Record**, use the site normally, then save it as a flow.
+Replay it exactly with no AI, or let Claude turn it into a smarter automation
+(loops over table rows, pagination, login, variables) from the tips you leave on each step.
+
+```
+┌──────────────── Electron shell (.exe) ─────────────────┐
+│  Next.js UI (glass chrome, recorder, flows, accounts)  │
+│  Tabs = real Chromium pages, one isolated profile      │
+│  per account (cookies & logins persist)                │
+│  Recorder + replay engine (trusted human-like input)   │
+└──────────────┬─────────────────────────────────────────┘
+               │ localhost + secret token
+┌──────────────▼──────────────┐
+│ FastAPI backend (bundled)   │  SQLite: flows, runs, accounts
+│ Encrypted vault (Fernet)    │  passwords, 2FA secrets, API key
+│ Claude: build flow / AI     │  optional
+│ steps / self-healing        │
+└─────────────────────────────┘
+```
+
+## Using it
+
+1. **Accounts** (person icon): create one account profile per login you want to automate. Each one is
+   a separate browser profile with its own cookies. Add a saved login (site, username, password, optional
+   2FA secret); everything is encrypted on your machine. You can also just open a tab as that account and log in by hand once.
+   The session is kept.
+2. **Record**: open the site, press **Record**, then click and type as usual. Each action becomes a step:
+   - email/username fields become `{{account.username}}`, passwords `{{account.password}}`, 2FA fields `{{account.totp}}`.
+     Real secrets are never stored in a flow.
+   - **Pick table** grabs a whole table or repeated list (rows and columns). **Pick text** grabs one value.
+   - **Wait for…**, **Pause**, **AI step** and **Log in with saved account** add steps by hand.
+3. **Tips**: every step has a *Tip for AI* box. Leave it **empty** to repeat exactly what you did.
+   Write a tip when you mean something more general: *"do this for every row"*, *"keep clicking next until the last page"*,
+   *"pick the newest order"*, *"type today's date"*.
+4. **Save** or **Save & build with AI**. Then, under **Flows**, pick the accounts to run as and a mode:
+
+| Mode | What runs | Needs API key |
+|---|---|---|
+| **Exact** | your recording, step by step | no |
+| **AI assist** | your recording; steps with a tip are done by the AI agent; broken selectors are re-found by AI | yes |
+| **AI-built** | the flow Claude built from your recording and tips (loops, login, pagination, variables) | only for its `ai` steps |
+
+Results (tables, text) are listed under **Runs** and can be exported as CSV or JSON.
+
+### Templates you can use in values
+`{{account.username}}` `{{account.password}}` `{{account.totp}}` `{{today}}` `{{now}}` `{{row.<column>}}` (inside a row loop) `{{vars.<name>}}` (results of earlier extract steps)
+
+## Staying under the radar
+
+What AutoBrowser does so sites see an ordinary Chrome:
+
+- Chrome user agent **and** matching client hints (`Sec-CH-UA*`, `navigator.userAgentData`) for the Chromium version it ships.
+- `navigator.webdriver === false`, `window.chrome` present, notification permission consistent; patched functions report `[native code]`.
+- **No DevTools protocol and no webdriver** during runs: clicks and keys go through Chromium's native input path, so events are
+  `isTrusted`. Mouse paths are curved, click points vary, and typing has natural rhythm; the **speed** is adjustable in Settings.
+- Recorder and replay code runs in an **isolated world** that page scripts can't see.
+- One persistent profile per account, with optional per-account **proxy** (`http://user:pass@host:port`, `socks5://…`).
+
+No automation tool is undetectable. Sites with strong bot protection, CAPTCHAs or behavioural scoring can still notice it.
+Use it on accounts you own and within each site's terms.
+
+## Development
+
+Requirements: Node 20+, Python 3.11+.
+
+```bash
+npm install            # root helpers (concurrently, wait-on)
+npm run setup          # installs frontend + desktop + backend deps
+npm run dev            # Next.js dev server + Electron (backend starts automatically)
+npm test               # backend unit tests
+npm run test:e2e       # builds the UI, launches the real app, records + replays on a demo site
+```
+
+In dev the Electron app starts the backend with your system `python` (or `backend/.venv` if present).
+
+## Building the Windows .exe
+
+On Windows (PowerShell):
+
+```powershell
+./scripts/build-windows.ps1
+```
+
+This produces `desktop/release/AutoBrowser Setup <version>.exe` (installer) and
+`desktop/release/AutoBrowser-<version>-portable.exe`. The GitHub Actions workflow
+`.github/workflows/build.yml` runs the tests and builds both executables on every push (download them from the run's artifacts).
+
+## Layout
+
+```
+backend/    FastAPI app (flows, runs, accounts vault, Claude integration), PyInstaller spec, tests
+frontend/   Next.js UI (static export, loaded by Electron from app://autobrowser)
+desktop/    Electron main process, page preload (stealth + recorder + DOM engine), replay runner
+scripts/    build-windows.ps1
+```
+
+Data lives in `%APPDATA%\AutoBrowser\data` (database, vault key). Browser profiles live in Electron's userData folder.

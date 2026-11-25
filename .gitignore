@@ -1,0 +1,15 @@
+node_modules/
+.next/
+frontend/out/
+desktop/release/
+backend/build/
+backend/dist/
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.db
+*.db-wal
+*.db-shm
+.env
+.DS_Store

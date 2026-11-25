@@ -1,0 +1,17 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Demo Shop – Orders</title>
+<style>body{font-family:system-ui;padding:30px;background:#f6f7fb}table{border-collapse:collapse;background:#fff}td,th{padding:8px 14px;border-bottom:1px solid #eee}a.next{display:inline-block;margin-top:14px;padding:8px 14px;background:#4f46e5;color:#fff;border-radius:8px;text-decoration:none}</style></head>
+<body><h1>Orders</h1><div id="who"></div>
+<table id="orders"><thead><tr><th>Order</th><th>Customer</th><th>Total</th></tr></thead><tbody></tbody></table>
+<a class="next" id="next" href="#">Next page</a>
+<script>
+if (!localStorage.user) { location.href = 'login.html'; }
+document.getElementById('who').textContent = 'Logged in as ' + localStorage.user;
+const page = +new URLSearchParams(location.search).get('page') || 1;
+const tb = document.querySelector('tbody');
+for (let i = 1; i <= 4; i++) {
+  const n = (page - 1) * 4 + i;
+  tb.insertAdjacentHTML('beforeend', `<tr><td>#${1000 + n}</td><td>Customer ${n}</td><td>$${(n * 7.5).toFixed(2)}</td></tr>`);
+}
+const next = document.getElementById('next');
+if (page >= 3) { next.style.display = 'none'; } else { next.href = 'orders.html?page=' + (page + 1); }
+</script></body></html>

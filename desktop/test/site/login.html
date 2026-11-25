@@ -1,0 +1,12 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Demo Shop – Sign in</title>
+<style>body{font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0;background:#f6f7fb}form{background:#fff;padding:32px;border-radius:16px;box-shadow:0 8px 30px #0001;display:flex;flex-direction:column;gap:12px;width:300px}input,button{padding:10px;border-radius:8px;border:1px solid #ccd}button{background:#4f46e5;color:#fff;border:0}</style></head>
+<body><form id="f" onsubmit="event.preventDefault(); if(document.querySelector('#email').value==='alice@shop.test' && document.querySelector('#password').value==='s3cret!'){localStorage.user='alice';location.href='orders.html?page=1'} else {document.querySelector('#err').textContent='Wrong login'}">
+<h2>Sign in</h2>
+<input id="email" name="email" type="email" autocomplete="username" placeholder="Email">
+<input id="password" name="password" type="password" placeholder="Password">
+<button type="submit" data-testid="login-btn">Sign in</button><div id="err" style="color:red"></div>
+<div id="probe" style="font-size:9px;word-break:break-all"></div>
+</form>
+<script>
+document.getElementById('probe').textContent = JSON.stringify({wd: navigator.webdriver, chrome: typeof window.chrome, brands: (navigator.userAgentData||{}).brands, ua: navigator.userAgent, ts: Function.prototype.toString.call(Object.getOwnPropertyDescriptor(Navigator.prototype,'webdriver').get)});
+</script></body></html>
