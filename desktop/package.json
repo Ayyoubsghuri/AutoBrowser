@@ -8,11 +8,12 @@
   "scripts": {
     "start": "electron .",
     "dev": "cross-env AB_DEV=1 electron .",
-    "check": "node --check src/main.js && node --check src/runner.js && node --check src/human.js && node --check src/backend.js && node --check src/stealth.js && node --check src/preload-ui.js && node --check src/preload-page.js && node --check src/firefox.js",
+    "check": "node --check src/main.js && node --check src/runner.js && node --check src/human.js && node --check src/backend.js && node --check src/stealth.js && node --check src/preload-ui.js && node --check src/preload-page.js && node --check src/firefox.js && node --check src/template.js",
     "dist": "electron-builder --win nsis portable --publish never",
     "dist:dir": "electron-builder --dir --publish never",
     "test:e2e": "node test/e2e.js",
-    "test:e2e:firefox": "node test/e2e-firefox.js"
+    "test:e2e:firefox": "node test/e2e-firefox.js",
+    "test:unit": "node --test test/unit/*.test.js"
   },
   "devDependencies": {
     "cross-env": "7.0.3",

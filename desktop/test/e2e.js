@@ -296,6 +296,11 @@ function screen(name) {
     // map the checkbox to the Agree column and the phone to the joined file, name the extracted value
     const checkCard = ui.locator('.step', { hasText: 'Set Consent given' });
     await checkCard.locator('select[title="Use a column of your data"]').selectOption('Agree');
+    const nameCard = ui.locator('.step', { hasText: 'Type into Full name' });
+    await nameCard.locator('select[title^="Format the value"]').selectOption('upper');
+    check(await nameCard.locator('input.grow').first().inputValue() === '{{row.Name | upper}}', 'Format menu added "| upper" to the value');
+    await nameCard.locator('text=ANA LIMA').waitFor({ timeout: 5000 });
+    check(true, 'live preview shows the formatted value for row 1 (ANA LIMA)');
     const phoneCard = ui.locator('.step', { hasText: 'Type into Phone' });
     await phoneCard.locator('input.grow').first().fill('{{row.phone}}');
     const textCard = ui.locator('.step', { hasText: 'Extract text' });
@@ -327,8 +332,8 @@ function screen(name) {
     console.log('  submitted:', JSON.stringify(subs));
     check(runRes.status === 'success', `data run succeeded (${runRes.status})`);
     check(subs.length === 3, `one submission per Excel row (got ${subs.length})`);
-    check(subs[0] && subs[0].name === 'Ana Lima' && subs[0].city === 'Rabat' && subs[0].agree === true && subs[0].phone === '0600111222', 'row 1 filled correctly (incl. joined phone, ticked)');
-    check(subs[1] && subs[1].name === 'Bo Chen' && subs[1].city === 'Fes' && subs[1].agree === false && subs[1].phone === '', 'row 2: checkbox left unticked, no phone match');
+    check(subs[0] && subs[0].name === 'ANA LIMA' && subs[0].city === 'Rabat' && subs[0].agree === true && subs[0].phone === '0600111222', 'row 1 filled correctly (incl. joined phone, ticked)');
+    check(subs[1] && subs[1].name === 'BO CHEN' && subs[1].city === 'Fes' && subs[1].agree === false && subs[1].phone === '', 'row 2: checkbox left unticked, no phone match');
     check(subs[2] && subs[2].caseid === '1003' && subs[2].agree === true && subs[2].phone === '0700333444', 'row 3 filled correctly');
     const results = runRes.output.filter((o) => o.name === '_rows').flatMap((o) => o.data);
     check(results.length === 3 && results.every((r) => r._status === 'success') && results[2].reference === 'Saved ref R-1003', 'per-row status + extracted reference recorded');

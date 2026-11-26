@@ -29,31 +29,7 @@ function frameCall(frame, cmd, args = {}, timeout = 15000) {
 
 class StopError extends Error {}
 
-// Looks up "row.Case ID" or "row.extra.City"; keys may contain spaces or dots.
-function lookup(obj, path) {
-  const parts = path.split('.');
-  let cur = obj;
-  let i = 0;
-  while (i < parts.length) {
-    if (cur == null || typeof cur !== 'object') return undefined;
-    let found = false;
-    for (let j = parts.length; j > i; j--) {
-      const k = parts.slice(i, j).join('.');
-      if (Object.prototype.hasOwnProperty.call(cur, k)) { cur = cur[k]; i = j; found = true; break; }
-    }
-    if (!found) return undefined;
-  }
-  return cur;
-}
-
-function render(str, vars) {
-  if (typeof str !== 'string') return str;
-  return str.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (m, key) => {
-    if (key === 'row' && (vars.row == null || typeof vars.row === 'object')) return m; // scope marker for row loops
-    const v = lookup(vars, key);
-    return v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
-  });
-}
+const { render, lookup } = require('./template');
 
 const TRUTHY = new Set(['1', 'true', 'yes', 'y', 'x', '✓', '✔', 'on', 'checked', 'oui', 'si', 'sí', 'ja', 'نعم', 'vrai']);
 const truthy = (v) => TRUTHY.has(String(v ?? '').trim().toLowerCase());

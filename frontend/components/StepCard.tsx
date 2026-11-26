@@ -2,6 +2,8 @@
 import {
   ArrowDown, ArrowUp, Bot, Clock, Globe, Keyboard, KeyRound, List, MousePointerClick, Repeat, ScrollText, Table2, Trash2, Type, GitBranch, ChevronDown, ScanText, CheckSquare, Repeat1,
 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { bridge } from '@/lib/bridge';
 import type { Step } from '@/lib/types';
 import { bestSelector, stepTitle } from '@/lib/steps';
 
@@ -9,6 +11,55 @@ const ICONS: Record<string, React.ComponentType<{ size?: number }>> = {
   goto: Globe, click: MousePointerClick, type: Type, select: ChevronDown, press: Keyboard, scroll: ScrollText,
   check: CheckSquare, wait: Clock, extract_table: Table2, extract_text: ScanText, login: KeyRound, loop: Repeat, if: GitBranch, ai: Bot,
 };
+
+const FORMATS: { label: string; filter: string }[] = [
+  { label: 'Date → 31/12/2024', filter: 'date:DD/MM/YYYY' },
+  { label: 'Date → 2024-12-31', filter: 'date:YYYY-MM-DD' },
+  { label: 'Date → 12/31/2024', filter: 'date:MM/DD/YYYY' },
+  { label: 'UPPER CASE', filter: 'upper' },
+  { label: 'lower case', filter: 'lower' },
+  { label: 'Title Case', filter: 'title' },
+  { label: 'Digits only', filter: 'digits' },
+  { label: 'No spaces', filter: 'nospace' },
+  { label: 'First word', filter: 'first' },
+  { label: 'Last word', filter: 'last' },
+  { label: 'Number, 2 decimals', filter: 'number:2' },
+  { label: 'If empty → …', filter: 'default:"-"' },
+];
+
+/** Adds a formatting filter to the last {{…}} in a value. */
+function addFormat(value: string, filter: string) {
+  const i = value.lastIndexOf('}}');
+  if (i < 0) return value;
+  return `${value.slice(0, i).trimEnd()} | ${filter}}}${value.slice(i + 2)}`;
+}
+
+function FormatPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  if (!/\{\{/.test(value)) return null;
+  return (
+    <select className="select small" style={{ width: 92, flex: 'none' }} value="" title="Format the value (date, case, digits…)"
+      onChange={(e) => e.target.value && onChange(addFormat(value, e.target.value))}>
+      <option value="">ƒ format…</option>
+      {FORMATS.map((f) => <option key={f.filter} value={f.filter}>{f.label}</option>)}
+    </select>
+  );
+}
+
+/** Shows what a template turns into for the sample row. */
+function ValuePreview({ value, sampleRow }: { value?: string; sampleRow?: Record<string, unknown> | null }) {
+  const [out, setOut] = useState<{ text?: string; error?: string } | null>(null);
+  useEffect(() => {
+    if (!value || !/\{\{/.test(value)) { setOut(null); return; }
+    let alive = true;
+    bridge().previewTemplate(value, { row: sampleRow || {}, account: { username: '(your saved username)', password: '••••••', totp: '••••••' } })
+      .then((r) => alive && setOut(r)).catch(() => {});
+    return () => { alive = false; };
+  }, [value, sampleRow]);
+  if (!out) return null;
+  return out.error
+    ? <div className="small" style={{ color: 'var(--rec)' }}>⚠ {out.error}</div>
+    : <div className="small muted ellipsis" title={out.text}>→ <span style={{ color: 'var(--ink)' }}>{out.text || '(empty)'}</span></div>;
+}
 
 /** Lets a value come from a column of the current data row. */
 function ColumnPicker({ columns, onPick }: { columns: string[]; onPick: (tpl: string) => void }) {
@@ -22,10 +73,10 @@ function ColumnPicker({ columns, onPick }: { columns: string[]; onPick: (tpl: st
   );
 }
 
-export function StepCard({ step, index, onChange, onRemove, onMove, readOnly = false, columns = [], rowStart = false, onSetRowStart, onRepeatForItems, onUndoRepeat }: {
+export function StepCard({ step, index, onChange, onRemove, onMove, readOnly = false, columns = [], sampleRow = null, rowStart = false, onSetRowStart, onRepeatForItems, onUndoRepeat }: {
   step: Step; index: number;
   onChange?: (s: Step) => void; onRemove?: () => void; onMove?: (dir: -1 | 1) => void; readOnly?: boolean;
-  columns?: string[]; rowStart?: boolean; onSetRowStart?: () => void;
+  columns?: string[]; sampleRow?: Record<string, unknown> | null; rowStart?: boolean; onSetRowStart?: () => void;
   onRepeatForItems?: () => void; onUndoRepeat?: () => void;
 }) {
   const Icon = ICONS[step.type] || List;
@@ -60,8 +111,10 @@ export function StepCard({ step, index, onChange, onRemove, onMove, readOnly = f
           <input className="input small grow" value={step.value ?? ''} onChange={(e) => set({ value: e.target.value })}
             placeholder="Value — supports {{account.username}}, {{today}}, {{row.col}}" type={step.secret && !String(step.value).includes('{{') ? 'password' : 'text'} />
           <ColumnPicker columns={columns} onPick={(tpl) => set({ value: tpl })} />
+          <FormatPicker value={step.value ?? ''} onChange={(v) => set({ value: v })} />
         </div>
       )}
+      {!readOnly && (step.type === 'type' || step.type === 'select') && !step.secret && <ValuePreview value={step.value} sampleRow={sampleRow} />}
       {!readOnly && step.type === 'check' && (
         <div className="row" style={{ gap: 6 }}>
           <select className="select small grow" value={['true', 'false'].includes(step.value || '') ? step.value : 'col'}
@@ -134,7 +187,7 @@ export function StepCard({ step, index, onChange, onRemove, onMove, readOnly = f
       {step.steps && step.steps.length > 0 && (
         <div className="children">
           {step.steps.map((c, i) => (
-            <StepCard key={c.id || i} step={c} index={i} readOnly={readOnly} columns={columns}
+            <StepCard key={c.id || i} step={c} index={i} readOnly={readOnly} columns={columns} sampleRow={sampleRow}
               onChange={(n) => set({ steps: step.steps!.map((x, j) => (j === i ? n : x)) })}
               onRemove={() => set({ steps: step.steps!.filter((_, j) => j !== i) })}
               onMove={(d) => { const a = step.steps!.slice(); const j = i + d; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; set({ steps: a }); }} />

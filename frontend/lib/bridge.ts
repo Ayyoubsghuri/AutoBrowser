@@ -20,6 +20,7 @@ export interface Bridge {
   };
   engine: { status(): Promise<{ firefoxInstalled: boolean; defaultEngine: string }>; installFirefox(): Promise<boolean> };
   setPageBounds(rect: { x: number; y: number; width: number; height: number } | null): Promise<void>;
+  previewTemplate(str: string, vars: Record<string, unknown>): Promise<{ text?: string; error?: string }>;
   profiles: { refresh(): Promise<void>; clearData(profileId: string | null): Promise<boolean> };
   settings: { refresh(): Promise<void> };
   recorder: { start(tabId?: number | null): Promise<void>; stop(): Promise<void>; setMode(mode: string): Promise<void> };
@@ -63,6 +64,7 @@ function mockBridge(): Bridge {
     },
     engine: { status: async () => ({ firefoxInstalled: false, defaultEngine: 'chromium' }), installFirefox: async () => false },
     setPageBounds: noop,
+    previewTemplate: async (str) => ({ text: str }),
     profiles: { refresh: noop, clearData: async () => true },
     settings: { refresh: noop },
     recorder: {

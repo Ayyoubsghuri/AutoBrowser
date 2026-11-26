@@ -11,6 +11,7 @@ const { startBackend } = require('./backend');
 const { identity } = require('./stealth');
 const { Runner } = require('./runner');
 const { FirefoxEngine } = require('./firefox');
+const template = require('./template');
 
 const DEV = !!process.env.AB_DEV;
 if (process.env.AB_USER_DATA) app.setPath('userData', process.env.AB_USER_DATA);
@@ -428,6 +429,7 @@ handle('rec:mode', (mode) => {
   sendUI('rec:state', { recording: true, tabId: recording.tabId, mode });
 });
 handle('runner:run', (opts) => runner.runMany(opts));
+handle('template:preview', (str, vars) => template.preview(str, { today: new Date().toISOString().slice(0, 10), now: new Date().toISOString(), ...(vars || {}) }));
 handle('engine:status', () => ({ firefoxInstalled: !!(firefox && firefox.installed()), defaultEngine: settings.default_engine || 'chromium' }));
 handle('engine:install-firefox', async () => {
   if (firefox.installed()) return true;

@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('autobrowser', {
     showFirefox: inv('tabs:show-firefox'),
   },
   setPageBounds: inv('ui:page-bounds'),
+  previewTemplate: inv('template:preview'),
   engine: { status: inv('engine:status'), installFirefox: inv('engine:install-firefox') },
   profiles: { refresh: inv('profiles:refresh'), clearData: inv('profiles:clear-data') },
   settings: { refresh: inv('settings:refresh') },

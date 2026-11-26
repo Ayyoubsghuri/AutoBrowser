@@ -17,7 +17,7 @@ jobs:
       - run: pip install -r backend/requirements-dev.txt
       - run: cd backend && python -m pytest -q
       - run: cd frontend && npm ci && npm run lint && npm run build
-      - run: cd desktop && npm ci && npm run check
+      - run: cd desktop && npm ci && npm run check && npm run test:unit
       - name: End-to-end (record + replay in the real app)
         run: cd desktop && xvfb-run -a -s "-screen 0 1440x920x24" npm run test:e2e
 

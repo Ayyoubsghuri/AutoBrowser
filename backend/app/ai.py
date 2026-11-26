@@ -420,6 +420,11 @@ DATA: this flow runs ONCE PER ROW of the user's data (Excel / CSV / PDFs, possib
 files). Steps before the step whose id is `start_step_id` run once (e.g. login); that step and all
 after it run for every row. Keep that id on the step that starts the per-row part, and make the
 per-row part end in a state where it can start again (e.g. back on an empty form).
+- Values can be formatted with filters, e.g. {{row.Date | date:DD/MM/YYYY}}, {{row.Name | upper}}; available:
+  upper, lower, title, trim, digits, nospace, first, last, slice:a:b, replace:"x":"y", split:" ":1, pad:6,
+  prefix:"+", suffix:"", default:"-", number:2 (number:2:, for a comma), yesno:Oui:Non,
+  date:<format with YYYY YY MM M DD D HH mm ss>, parsedate:MM/DD/YYYY (read unusual input orders first).
+  Excel dates arrive as YYYY-MM-DD.
 - Use {{row.<column>}} in `value` / `url` / `instruction` (columns of joined files under a prefix: {{row.<prefix>.<column>}}).
 - Checkboxes, radios and switches: a `check` step whose `value` is "true", "false" or {{row.<column>}}
   (yes / x / 1 / true / oui count as on). Do not use `click` for these: clicking toggles.
