@@ -90,6 +90,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(flows)")}
     if "data" not in cols:  # per-flow data source config (added in 0.3)
         conn.execute("ALTER TABLE flows ADD COLUMN data TEXT")
+    pcols = {r[1] for r in conn.execute("PRAGMA table_info(profiles)")}
+    if "engine" not in pcols:  # chromium (built-in) | firefox (added in 0.4)
+        conn.execute("ALTER TABLE profiles ADD COLUMN engine TEXT NOT NULL DEFAULT 'chromium'")
     conn.commit()
 
 

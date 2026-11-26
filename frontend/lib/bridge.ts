@@ -16,7 +16,9 @@ export interface Bridge {
     forward(id?: number): Promise<void>;
     reload(id?: number): Promise<void>;
     setProfile(id: number | null, profileId: string | null): Promise<TabInfo>;
+    showFirefox(id?: number | null): Promise<void>;
   };
+  engine: { status(): Promise<{ firefoxInstalled: boolean; defaultEngine: string }>; installFirefox(): Promise<boolean> };
   setPageBounds(rect: { x: number; y: number; width: number; height: number } | null): Promise<void>;
   profiles: { refresh(): Promise<void>; clearData(profileId: string | null): Promise<boolean> };
   settings: { refresh(): Promise<void> };
@@ -57,7 +59,9 @@ function mockBridge(): Bridge {
       navigate: async (id, input) => { tabs = tabs.map((t) => (t.id === (id ?? active) ? { ...t, url: input, title: input } : t)); push(); },
       back: noop, forward: noop, reload: noop,
       setProfile: async (id, profileId) => { tabs = tabs.map((t) => (t.id === (id ?? active) ? { ...t, profileId } : t)); push(); return tabs[0]; },
+      showFirefox: noop,
     },
+    engine: { status: async () => ({ firefoxInstalled: false, defaultEngine: 'chromium' }), installFirefox: async () => false },
     setPageBounds: noop,
     profiles: { refresh: noop, clearData: async () => true },
     settings: { refresh: noop },

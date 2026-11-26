@@ -139,11 +139,15 @@ class FlowPatch(BaseModel):
     data: Optional[FlowData] = None
 
 
+Engine = Literal["chromium", "firefox"]
+
+
 class ProfileIn(BaseModel):
     name: str
     color: str = "#7c9cff"
     proxy: Optional[str] = None
     notes: Optional[str] = None
+    engine: Engine = "chromium"
 
 
 class ProfilePatch(BaseModel):
@@ -151,6 +155,7 @@ class ProfilePatch(BaseModel):
     color: Optional[str] = None
     proxy: Optional[str] = None
     notes: Optional[str] = None
+    engine: Optional[Engine] = None
 
 
 class CredentialIn(BaseModel):
@@ -203,6 +208,7 @@ class SettingsIn(BaseModel):
     human_speed: Optional[float] = None    # 0.5 = faster, 2 = slower
     stealth: Optional[bool] = None
     privacy_mode: Optional[bool] = None    # AI reads page code, never page data
+    default_engine: Optional[Literal["chromium", "firefox"]] = None  # for tabs without an account
 
 
 class ElementInfo(BaseModel):

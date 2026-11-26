@@ -39,8 +39,8 @@ def list_profiles():
 def create_profile(body: ProfileIn):
     pid = db.new_id()
     with db.tx() as c:
-        c.execute("INSERT INTO profiles(id,name,color,proxy,notes,created) VALUES(?,?,?,?,?,?)",
-                  (pid, body.name, body.color, body.proxy, body.notes, db.now()))
+        c.execute("INSERT INTO profiles(id,name,color,proxy,notes,engine,created) VALUES(?,?,?,?,?,?,?)",
+                  (pid, body.name, body.color, body.proxy, body.notes, body.engine, db.now()))
     return _profile(pid)
 
 

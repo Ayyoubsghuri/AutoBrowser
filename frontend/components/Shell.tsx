@@ -66,6 +66,7 @@ export default function Shell() {
 
   const activeTab = tabs.find((t) => t.id === activeId) || null;
   const showStart = !activeTab || !activeTab.url;
+  const inFirefox = !!activeTab && activeTab.engine === 'firefox' && !showStart;
 
   const toast = useCallback((msg: string, error = false) => {
     setToastMsg({ msg, error });
@@ -138,7 +139,7 @@ export default function Shell() {
     const el = frameRef.current;
     if (!el) return;
     const send = () => {
-      if (showStart) { b.setPageBounds(null); return; }
+      if (showStart || inFirefox) { b.setPageBounds(null); return; }
       const r = el.getBoundingClientRect();
       b.setPageBounds({ x: r.x, y: r.y, width: r.width, height: r.height });
     };
@@ -147,7 +148,7 @@ export default function Shell() {
     ro.observe(el);
     window.addEventListener('resize', send);
     return () => { ro.disconnect(); window.removeEventListener('resize', send); };
-  }, [b, showStart, panel]);
+  }, [b, showStart, inFirefox, panel]);
 
   // ------------------------------------------------------------ actions
   const navigate = (input: string) => {
@@ -195,6 +196,7 @@ export default function Shell() {
               <div key={t.id} className={`tab nodrag ${t.id === activeId ? 'active' : ''}`} onMouseDown={() => b.tabs.activate(t.id)} role="tab">
                 {t.loading ? <Loader2 size={14} className="spin" /> : t.favicon ? <img className="fav" src={t.favicon} alt="" /> : <Circle size={14} />}
                 <span className="t">{t.title || 'New tab'}</span>
+                {t.engine === 'firefox' && <span className="tag" style={{ height: 16, padding: '0 5px', fontSize: 10 }} title="Open in the Firefox window">FF</span>}
                 {p && <span className="dot" style={{ background: p.color }} title={p.name} />}
                 <button className="x" onMouseDown={(e) => { e.stopPropagation(); b.tabs.close(t.id); }} aria-label="Close tab"><X size={13} /></button>
               </div>
@@ -247,14 +249,23 @@ export default function Shell() {
 
         {/* ---------------------------------------------- page */}
         <main className="pagewrap">
-          {showStart ? (
+          {inFirefox ? (
+            <div className="start">
+              <div className="card" style={{ maxWidth: 460, textAlign: 'center', alignItems: 'center' }}>
+                <div className="title" style={{ fontSize: 16 }}>This tab is open in Firefox</div>
+                <div className="small muted ellipsis" style={{ maxWidth: 400 }}>{activeTab!.title} · {activeTab!.url}</div>
+                <div className="small muted">Use the Firefox window to browse. Recording, runs and data work from here as usual.</div>
+                <button className="btn primary" onClick={() => b.tabs.showFirefox(activeTab!.id)}>Show Firefox window</button>
+              </div>
+            </div>
+          ) : showStart ? (
             <StartPage onGo={navigate} flows={flows} onOpenFlows={() => setPanel('flows')} hasBackendError={backendError} />
           ) : (
             <div ref={frameRef} className={`pageframe ${rec.recording ? 'recording' : ''}`}>
               <div className="placeholder">Loading…</div>
             </div>
           )}
-          {showStart && <div ref={frameRef} style={{ display: 'none' }} />}
+          {(showStart || inFirefox) && <div ref={frameRef} style={{ display: 'none' }} />}
         </main>
 
         {/* ---------------------------------------------- panel */}

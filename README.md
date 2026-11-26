@@ -93,6 +93,18 @@ For zero data leaving the machine at all, combine private mode with a local mode
 ### Templates you can use in values
 `{{account.username}}` `{{account.password}}` `{{account.totp}}` `{{today}}` `{{now}}` `{{row.<column>}}` (inside a row loop) `{{vars.<name>}}` (results of earlier extract steps)
 
+## Browser engine: built-in Chromium or Firefox
+
+AutoBrowser's own tabs are Chromium (Electron can only embed Chromium). You can also use **Firefox**:
+
+- **Settings → Browser engine → Install Firefox engine** downloads Playwright's Firefox build (~95 MB) once.
+- Pick Firefox as the **default** for new tabs, or per account (**Accounts → Browser**). Each Firefox account keeps
+  its own profile, logins and cookies.
+- Firefox opens in **its own window** next to AutoBrowser. The tab bar shows it with an `FF` badge, and
+  **Show Firefox window** brings it forward. Recording, Pick table/text, runs, Excel/PDF data, AI steps and private mode
+  all work the same as with the built-in browser.
+- Sites see a normal Firefox: real Firefox user agent and `navigator.webdriver === false`.
+
 ## Staying under the radar
 
 What AutoBrowser does so sites see an ordinary Chrome:

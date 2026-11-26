@@ -58,11 +58,13 @@ export type Credential = {
 
 export type Profile = {
   id: string; name: string; color: string; proxy?: string | null; notes?: string | null;
-  credentials: Credential[]; partition: string;
+  credentials: Credential[]; partition: string; engine?: Engine;
 };
 
+export type Engine = 'chromium' | 'firefox';
+
 export type TabInfo = {
-  id: number; profileId: string | null; title: string; url: string; favicon: string | null;
+  id: number; engine?: Engine; profileId: string | null; title: string; url: string; favicon: string | null;
   loading: boolean; canGoBack: boolean; canGoForward: boolean;
 };
 
@@ -83,6 +85,7 @@ export type Settings = {
   human_speed: number;
   stealth: boolean;
   privacy_mode: boolean; // AI reads page code, never page data
+  default_engine?: Engine;
 };
 
 export type RunMode = 'exact' | 'assist' | 'compiled';

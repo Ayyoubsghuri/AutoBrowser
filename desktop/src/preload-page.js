@@ -10,16 +10,18 @@ const { ipcRenderer, contextBridge, webFrame } = require('electron');
 // ---------------------------------------------------------------- 1. stealth
 function stealthPatch(cfg) {
   try {
+    const firefox = cfg.engine === 'firefox';
     const nativeToString = Function.prototype.toString;
     const fake = new WeakMap();
-    const mark = (fn, name) => { fake.set(fn, `function ${name}() { [native code] }`); return fn; };
+    const nativeText = (name) => (firefox ? `function ${name.replace(/^get /, '')}() {\n    [native code]\n}` : `function ${name}() { [native code] }`);
+    const mark = (fn, name) => { fake.set(fn, nativeText(name)); return fn; };
     const toStringProxy = new Proxy(nativeToString, {
       apply(target, thisArg, args) {
         if (fake.has(thisArg)) return fake.get(thisArg);
         return Reflect.apply(target, thisArg, args);
       },
     });
-    fake.set(toStringProxy, 'function toString() { [native code] }');
+    fake.set(toStringProxy, nativeText('toString'));
     Function.prototype.toString = toStringProxy;
 
     const getter = (obj, prop, value) => {
@@ -32,6 +34,7 @@ function stealthPatch(cfg) {
     };
 
     getter(Navigator.prototype, 'webdriver', false);
+    if (firefox) return; // Firefox already looks like Firefox; only the automation flag needs hiding
     getter(Navigator.prototype, 'languages', Object.freeze(cfg.languages.slice()));
     getter(Navigator.prototype, 'hardwareConcurrency', cfg.hardwareConcurrency);
 

@@ -10,6 +10,7 @@ const { pathToFileURL } = require('url');
 const { startBackend } = require('./backend');
 const { identity } = require('./stealth');
 const { Runner } = require('./runner');
+const { FirefoxEngine } = require('./firefox');
 
 const DEV = !!process.env.AB_DEV;
 if (process.env.AB_USER_DATA) app.setPath('userData', process.env.AB_USER_DATA);
@@ -38,6 +39,7 @@ let nextTabId = 1;
 let pageBounds = null;
 let recording = null; // {tabId, mode}
 const configuredSessions = new Set();
+let firefox = null; // optional Firefox engine (separate window)
 
 // ------------------------------------------------------------------ backend api
 async function api(method, p, body) {
@@ -137,7 +139,7 @@ function sendUI(channel, payload) {
 }
 
 function tabInfo(t) {
-  return { id: t.id, profileId: t.profileId, title: t.title, url: t.url, favicon: t.favicon, loading: t.loading, canGoBack: t.view.webContents.navigationHistory.canGoBack(), canGoForward: t.view.webContents.navigationHistory.canGoForward() };
+  return { id: t.id, engine: t.engine || 'chromium', profileId: t.profileId, title: t.title, url: t.url, favicon: t.favicon, loading: t.loading, canGoBack: t.view.webContents.navigationHistory.canGoBack(), canGoForward: t.view.webContents.navigationHistory.canGoForward() };
 }
 
 function pushTabs() {
@@ -149,14 +151,53 @@ function layout() {
   const b = win.getContentBounds();
   uiView.setBounds({ x: 0, y: 0, width: b.width, height: b.height });
   for (const t of tabs.values()) {
-    const show = t.id === activeTabId && pageBounds && t.url;
+    const show = t.id === activeTabId && pageBounds && t.url && !t.view.external;
     t.view.setVisible(!!show);
     if (show) t.view.setBounds(pageBounds);
   }
 }
 
 // ------------------------------------------------------------------ tabs
-function createTab({ url, profileId = null, activate = true } = {}) {
+function engineFor(profileId) {
+  const p = profiles.get(profileId);
+  return (p && p.engine) || settings.default_engine || 'chromium';
+}
+
+function createTab(opts = {}) {
+  return engineFor(opts.profileId ?? null) === 'firefox' ? createFirefoxTab(opts) : createChromiumTab(opts);
+}
+
+// A tab whose page lives in the Firefox window. `view.webContents` is a look-alike
+// (see firefox.js), so recording, running and private mode work the same way.
+async function createFirefoxTab({ url, profileId = null, activate = true } = {}) {
+  const wc = await firefox.openPage(profileId, profiles.get(profileId), ID.languages[0], url || null);
+  for (const t of tabs.values()) if (t.view.webContents === wc) return t;
+  const id = nextTabId++;
+  const view = { external: true, webContents: wc, setVisible() {}, setBounds() {} };
+  const tab = { id, view, engine: 'firefox', profileId, title: url ? 'Loading…' : 'New tab', url: url || '', favicon: null, loading: !!url };
+  tabs.set(id, tab);
+  const upd = () => { tab.url = wc.getURL() === 'about:blank' ? '' : wc.getURL(); tab.title = wc.getTitle() || tab.url || 'New tab'; pushTabs(); layout(); };
+  wc.on('page-title-updated', upd);
+  wc.on('did-start-navigation', () => { tab.loading = true; pushTabs(); });
+  wc.on('did-stop-loading', () => { tab.loading = false; upd(); });
+  wc.on('did-navigate', (_e, u) => {
+    upd();
+    if (recording && recording.tabId === id && u !== 'about:blank') sendUI('rec:navigated', { tabId: id, url: u, ts: Date.now() });
+  });
+  wc.on('destroyed', () => {
+    if (!tabs.has(id)) return;
+    if (recording && recording.tabId === id) stopRecording();
+    tabs.delete(id);
+    if (activeTabId === id) activeTabId = [...tabs.keys()].pop() ?? null;
+    if (!tabs.size) createTab({ profileId: null });
+    layout(); pushTabs();
+  });
+  if (activate) activateTab(id); else layout();
+  pushTabs();
+  return tab;
+}
+
+function createChromiumTab({ url, profileId = null, activate = true } = {}) {
   const partition = partitionFor(profileId);
   configureSession(partition, profiles.get(profileId));
   const view = new WebContentsView({
@@ -228,8 +269,11 @@ function activateTab(id) {
   activeTabId = id;
   // bring to front
   const t = tabs.get(id);
-  win.contentView.removeChildView(t.view);
-  win.contentView.addChildView(t.view);
+  if (t.view.external) t.view.webContents.focus();
+  else {
+    win.contentView.removeChildView(t.view);
+    win.contentView.addChildView(t.view);
+  }
   layout();
   pushTabs();
 }
@@ -238,9 +282,9 @@ function closeTab(id) {
   const t = tabs.get(id);
   if (!t) return;
   if (recording && recording.tabId === id) stopRecording();
-  win.contentView.removeChildView(t.view);
-  t.view.webContents.close();
   tabs.delete(id);
+  if (!t.view.external) win.contentView.removeChildView(t.view);
+  t.view.webContents.close();
   if (activeTabId === id) {
     const rest = [...tabs.keys()];
     activeTabId = rest.length ? rest[rest.length - 1] : null;
@@ -297,11 +341,12 @@ ipcMain.on('rec:step', (e, step) => {
   sendUI('rec:step', step);
 });
 
-ipcMain.handle('rec:get-mode', (e) => {
+function recModeFor(sender) {
   if (!recording) return 'off';
   const t = tabs.get(recording.tabId);
-  return t && e.sender === t.view.webContents ? recording.mode : 'off';
-});
+  return t && sender === t.view.webContents ? recording.mode : 'off';
+}
+ipcMain.handle('rec:get-mode', (e) => recModeFor(e.sender));
 
 ipcMain.on('page:stealth-config', (e) => {
   e.returnValue = settings.stealth === false ? null : {
@@ -322,7 +367,7 @@ async function tabForProfile(profileId) {
     }
   }
   if (profileId && !profiles.has(profileId)) await refreshProfiles();
-  return createTab({ url: 'about:blank', profileId, activate: true });
+  return await createTab({ url: 'about:blank', profileId, activate: true });
 }
 
 // ------------------------------------------------------------------ IPC from UI
@@ -336,7 +381,7 @@ function handle(channel, fn) {
 
 handle('backend:info', () => ({ port: backend.port, token: backend.token, platform: process.platform, chrome: process.versions.chrome, version: app.getVersion() }));
 handle('tabs:list', () => ({ tabs: [...tabs.values()].map(tabInfo), activeTabId }));
-handle('tabs:create', ({ url, profileId } = {}) => tabInfo(createTab({ url: normalizeUrl(url), profileId })));
+handle('tabs:create', async ({ url, profileId } = {}) => tabInfo(await createTab({ url: normalizeUrl(url), profileId })));
 handle('tabs:close', (id) => closeTab(id));
 handle('tabs:activate', (id) => activateTab(id));
 handle('tabs:navigate', (id, input) => {
@@ -346,6 +391,7 @@ handle('tabs:navigate', (id, input) => {
   if (!u) return;
   t.url = u;
   t.view.webContents.loadURL(u).catch(() => {});
+  if (t.view.external) t.view.webContents.focus();
   layout();
 });
 handle('tabs:back', (id) => { const t = tabs.get(id ?? activeTabId); if (t && t.view.webContents.navigationHistory.canGoBack()) t.view.webContents.navigationHistory.goBack(); });
@@ -356,7 +402,7 @@ handle('tabs:set-profile', async (id, profileId) => {
   const t = tabs.get(id ?? activeTabId);
   await refreshProfiles();
   const url = t ? t.view.webContents.getURL() : '';
-  const nt = createTab({ url, profileId });
+  const nt = await createTab({ url: url === 'about:blank' ? '' : url, profileId });
   if (t) closeTab(t.id);
   return tabInfo(nt);
 });
@@ -381,6 +427,13 @@ handle('rec:mode', (mode) => {
   sendUI('rec:state', { recording: true, tabId: recording.tabId, mode });
 });
 handle('runner:run', (opts) => runner.runMany(opts));
+handle('engine:status', () => ({ firefoxInstalled: !!(firefox && firefox.installed()), defaultEngine: settings.default_engine || 'chromium' }));
+handle('engine:install-firefox', async () => {
+  if (firefox.installed()) return true;
+  await firefox.install((line) => sendUI('engine:progress', { line }));
+  return true;
+});
+handle('tabs:show-firefox', (id) => { const t = tabs.get(id ?? activeTabId); if (t && t.view.external) t.view.webContents.focus(); });
 handle('runner:stop', (runId) => runner.stop(runId));
 handle('shell:open', (url) => { if (/^https?:/.test(url)) shell.openExternal(url); });
 handle('file:save', async ({ name, content, base64 }) => {
@@ -444,6 +497,16 @@ app.whenReady().then(async () => {
   }
   await Promise.all([refreshProfiles(), refreshSettings()]);
   configureSession(partitionFor(null), null);
+  firefox = new FirefoxEngine({
+    browsersPath: process.env.AB_BROWSERS || path.join(app.getPath('userData'), 'browsers'),
+    profilesPath: path.join(app.getPath('userData'), 'firefox-profiles'),
+    hooks: {
+      // page script -> main (same channels as the Chromium preload uses)
+      onSend: (wc, frame, channel, args) => ipcMain.emit(channel, { sender: wc, senderFrame: frame, returnValue: null }, ...args),
+      onInvoke: (wc, channel) => (channel === 'rec:get-mode' ? recModeFor(wc) : null),
+    },
+  });
+  if (process.env.AB_TEST) global.__abTest = { tabs, get firefox() { return firefox; } }; // end-to-end tests only
   runner = new Runner({
     tabForProfile,
     api,
@@ -458,4 +521,4 @@ app.on('window-all-closed', () => {
   if (backend) backend.stop();
   app.quit();
 });
-app.on('before-quit', () => { if (backend) backend.stop(); });
+app.on('before-quit', () => { if (backend) backend.stop(); if (firefox) firefox.closeAll(); });

@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { ExternalLink, KeyRound, Plus, ShieldCheck, Trash2, UserRound, X, Eraser } from 'lucide-react';
 import { bridge } from '@/lib/bridge';
 import { del, patch, post } from '@/lib/api';
-import type { Profile } from '@/lib/types';
+import type { Engine, Profile } from '@/lib/types';
 import type { AppCtx } from './Shell';
 
 const COLORS = ['#6c5cff', '#1fa463', '#ef4b5b', '#f59e0b', '#0ea5e9', '#ec4899', '#14b8a6', '#64748b'];
@@ -38,6 +38,7 @@ export function AccountsPanel({ ctx, onClose }: { ctx: AppCtx; onClose: () => vo
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const [proxy, setProxy] = useState('');
+  const [engine, setEngine] = useState<Engine>(ctx.settings?.default_engine || 'chromium');
   const [color, setColor] = useState(COLORS[ctx.profiles.length % COLORS.length]);
   const [addingFor, setAddingFor] = useState<string | null>(null);
   const [pwFor, setPwFor] = useState<string | null>(null);
@@ -46,7 +47,7 @@ export function AccountsPanel({ ctx, onClose }: { ctx: AppCtx; onClose: () => vo
   const create = async () => {
     if (!name.trim()) return;
     try {
-      const p = await post<Profile>('/profiles', { name: name.trim(), color, proxy: proxy.trim() || null });
+      const p = await post<Profile>('/profiles', { name: name.trim(), color, proxy: proxy.trim() || null, engine });
       await ctx.reloadProfiles();
       setCreating(false); setName(''); setProxy('');
       setAddingFor(p.id);
@@ -72,6 +73,13 @@ export function AccountsPanel({ ctx, onClose }: { ctx: AppCtx; onClose: () => vo
             <div className="row">{COLORS.map((c) => (
               <button key={c} onClick={() => setColor(c)} aria-label={c} style={{ width: 22, height: 22, borderRadius: 11, border: color === c ? '2px solid var(--ink)' : '2px solid transparent', background: c }} />
             ))}</div>
+            <div className="label">Browser
+              <div className="segmented">
+                <button className={engine === 'chromium' ? 'on' : ''} onClick={() => setEngine('chromium')}>Built-in (Chromium)</button>
+                <button className={engine === 'firefox' ? 'on' : ''} onClick={() => setEngine('firefox')}>Firefox</button>
+              </div>
+              {engine === 'firefox' && <span className="small muted">Opens in its own Firefox window. Install it once in Settings → Browser engine.</span>}
+            </div>
             <button className="btn primary" onClick={create}>Create account profile</button>
           </div>
         )}
@@ -85,6 +93,12 @@ export function AccountsPanel({ ctx, onClose }: { ctx: AppCtx; onClose: () => vo
               <div className="grow">
                 <div className="title">{p.name}</div>
                 {p.proxy && <div className="small muted mono ellipsis">via {p.proxy.replace(/\/\/.*@/, '//•••@')}</div>}
+                <select className="small" style={{ border: 0, background: 'transparent', color: 'var(--muted)', padding: 0 }} value={p.engine || 'chromium'}
+                  title="Browser used for this account" aria-label="Browser"
+                  onChange={async (e) => { await patch(`/profiles/${p.id}`, { engine: e.target.value }); await ctx.reloadProfiles(); ctx.toast('Applies to tabs opened from now on'); }}>
+                  <option value="chromium">Built-in (Chromium)</option>
+                  <option value="firefox">Firefox window</option>
+                </select>
               </div>
               <button className="iconbtn" title="Open a tab as this account (log in manually once — the session is kept)" aria-label="Open tab"
                 onClick={() => b.tabs.create({ url: ctx.activeTab?.url || '', profileId: p.id })}><ExternalLink size={15} /></button>
