@@ -40,8 +40,8 @@ def get_run(rid: str):
 def create_run(body: RunIn):
     rid = db.new_id()
     with db.tx() as c:
-        c.execute("INSERT INTO runs(id,flow_id,profile_id,mode,started) VALUES(?,?,?,?,?)",
-                  (rid, body.flow_id, body.profile_id, body.mode, db.now()))
+        c.execute("INSERT INTO runs(id,flow_id,profile_id,mode,dataset_id,started) VALUES(?,?,?,?,?,?)",
+                  (rid, body.flow_id, body.profile_id, body.mode, body.dataset_id, db.now()))
     return _run(rid)
 
 
@@ -132,3 +132,34 @@ def run_xlsx(rid: str):
     wb.save(buf)
     return Response(buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="run-{rid}.xlsx"'})
+
+
+@router.get("/runs/{rid}/updated-file")
+def run_updated_file(rid: str):
+    """Your original Excel / CSV with 'AutoBrowser status', 'AutoBrowser message' and extracted values added."""
+    from .. import writeback
+    run = _run(rid)
+    if not run.get("dataset_id"):
+        raise HTTPException(400, "This run did not use a data file")
+    results = writeback.row_results(run)
+    try:
+        name, content, mime = writeback.updated_file(run["dataset_id"], results)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    from urllib.parse import quote
+    return Response(content, media_type=mime, headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}", "X-Filename": quote(name)})
+
+
+@router.post("/runs/{rid}/apply-to-data")
+def run_apply_to_data(rid: str):
+    """Copy the run's per-row status / values into the data source (used by 'skip rows already done')."""
+    from .. import writeback
+    run = _run(rid)
+    if not run.get("dataset_id"):
+        raise HTTPException(400, "This run did not use a data file")
+    results = writeback.row_results(run)
+    try:
+        d = writeback.apply_to_dataset(run["dataset_id"], results)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True, "rows_updated": len(results), "columns": d["columns"]}

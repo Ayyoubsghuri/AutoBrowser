@@ -25,12 +25,13 @@ export interface Bridge {
   settings: { refresh(): Promise<void> };
   recorder: { start(tabId?: number | null): Promise<void>; stop(): Promise<void>; setMode(mode: string): Promise<void> };
   runner: {
-    run(o: { flow: unknown; profileIds: (string | null)[]; mode: RunMode; parallel?: boolean }): Promise<{ runId: string; status: string }[]>;
+    run(o: { flow: unknown; profileIds: (string | null)[]; mode: RunMode; parallel?: boolean; rows?: number[] }): Promise<{ runId: string; status: string }[]>;
     stop(runId?: string): Promise<void>;
     resume(runId: string, action: 'continue' | 'skip' | 'stop'): Promise<boolean>;
   };
   openExternal(url: string): Promise<void>;
-  saveFile(o: { name: string; content: string; base64?: boolean }): Promise<string | null>;
+  saveFile(o: { name: string; content: string; base64?: boolean; defaultPath?: string | null }): Promise<string | null>;
+  pathForFile?(file: File): string | null;
   on(channel: string, cb: (payload: any) => void): Unsub;
 }
 

@@ -145,6 +145,8 @@ export function FlowDataCard({ ctx, flow, onSaved }: { ctx: AppCtx; flow: Flow; 
             <label className="row" style={{ gap: 4 }}>From row <input className="input small" style={{ width: 64 }} type="number" min={1} value={cfg.first_row || 1} onChange={(e) => update({ first_row: Math.max(1, Number(e.target.value)) })} /></label>
             <label className="row" style={{ gap: 4 }}>Max <input className="input small" style={{ width: 64 }} type="number" min={1} placeholder="all" value={cfg.max_rows || ''} onChange={(e) => update({ max_rows: e.target.value ? Number(e.target.value) : null })} /></label>
             <label className="row" style={{ gap: 4 }}><input type="checkbox" checked={!!cfg.stop_on_error} onChange={(e) => update({ stop_on_error: e.target.checked })} /> stop at first error</label>
+            <label className="row" style={{ gap: 4 }} title="Rows whose 'AutoBrowser status' is success (from earlier runs) are not done again">
+              <input type="checkbox" checked={!!cfg.skip_done} onChange={(e) => update({ skip_done: e.target.checked })} /> skip rows already done</label>
           </div>
         </>
       )}

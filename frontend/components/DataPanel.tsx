@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, FileSpreadsheet, FileText, Lock, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react';
 import { del, fileToBase64, get, patch, post } from '@/lib/api';
+import { bridge } from '@/lib/bridge';
 import type { Dataset, PdfRule } from '@/lib/types';
 import type { AppCtx } from './Shell';
 
@@ -36,7 +37,9 @@ export function useDatasets(ctx: AppCtx) {
 
 export async function uploadFiles(files: File[], extra: Record<string, unknown> = {}): Promise<Dataset> {
   const payload = await Promise.all(files.map(async (f) => ({ filename: f.name, content_b64: await fileToBase64(f) })));
-  return post<Dataset>('/datasets', { files: payload, ...extra });
+  const b = bridge();
+  const source = files.length === 1 && b.pathForFile ? b.pathForFile(files[0]) : null;
+  return post<Dataset>('/datasets', { files: payload, ...(source ? { source_path: source } : {}), ...extra });
 }
 
 function PdfRules({ ds, onChange, ctx }: { ds: Dataset; onChange: (d: Dataset) => void; ctx: AppCtx }) {

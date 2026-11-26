@@ -1,5 +1,5 @@
 // Bridge between the Next.js UI and the Electron main process.
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const EVENTS = new Set([
   'tabs:update', 'tabs:error', 'rec:step', 'rec:state', 'rec:navigated',
@@ -31,6 +31,8 @@ contextBridge.exposeInMainWorld('autobrowser', {
   recorder: { start: inv('rec:start'), stop: inv('rec:stop'), setMode: inv('rec:mode') },
   runner: { run: inv('runner:run'), stop: inv('runner:stop'), resume: inv('runner:resume') },
   openExternal: inv('shell:open'),
+  // full path of a file picked in an <input type=file> (to save results next to the original)
+  pathForFile: (file) => { try { return webUtils.getPathForFile(file) || null; } catch { return null; } },
   saveFile: inv('file:save'),
   on(channel, cb) {
     if (!EVENTS.has(channel)) throw new Error(`unknown channel ${channel}`);

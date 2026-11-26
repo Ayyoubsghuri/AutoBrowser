@@ -101,13 +101,14 @@ def ai_preview(fid: str, body: CompileIn | None = None):
 
 
 @router.get("/flows/{fid}/data-rows")
-def flow_data_rows(fid: str, limit: int | None = None):
+def flow_data_rows(fid: str, limit: int | None = None, rows: str | None = None):
     """The rows this flow will loop over: main data + joined files, filtered."""
     flow = _flow(fid)
     if not flow.get("data"):
         return {"columns": [], "rows": [], "total": 0}
     try:
-        columns, rows, total = data_rows.resolve(flow["data"])
+        only = [int(x) for x in rows.split(",") if x.strip().isdigit()] if rows else None
+        columns, picked, total = data_rows.resolve(flow["data"], only)
     except LookupError as e:
         raise HTTPException(404, str(e))
-    return {"columns": columns, "rows": rows[:limit] if limit else rows, "total": total}
+    return {"columns": columns, "rows": picked[:limit] if limit else picked, "total": total}

@@ -50,13 +50,15 @@ def _to_table(matrix: list[list[Any]], header_row: int = 1) -> tuple[list[str], 
     width = max(len(r) for r in matrix)
     cols = _columns(matrix[hi] if hi < len(matrix) else [], width)
     rows = []
-    for r in matrix[hi + 1:]:
+    for j, r in enumerate(matrix[hi + 1:], start=hi + 2):
         vals = [norm_cell(r[i]) if i < len(r) else "" for i in range(width)]
         if any(vals):
-            rows.append(dict(zip(cols, vals)))
+            row = dict(zip(cols, vals))
+            row["_line"] = j  # line number in the original sheet / file (for writing results back)
+            rows.append(row)
     # drop trailing all-empty generated columns
     used = [c for c in cols if not c.startswith("col_") or any(row[c] for row in rows)]
-    return used, [{c: row[c] for c in used} for row in rows]
+    return used, [{**{c: row[c] for c in used}, "_line": row["_line"]} for row in rows]
 
 
 def parse_table(filename: str, content: bytes, sheet: str | None = None, header_row: int = 1) -> dict[str, Any]:

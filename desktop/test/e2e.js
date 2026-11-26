@@ -443,6 +443,52 @@ function screen(name) {
     const nf = await call('POST', '/flows', { name: 'No captcha', steps: [{ id: 'g', type: 'goto', url: `${base}/apply.html` }, { id: 'p', type: 'pause', value: 'x', condition: { captcha: true } }] });
     const [nres] = await ui.evaluate((flow) => window.autobrowser.runner.run({ flow, profileIds: [null], mode: 'exact' }), nf);
     check(nres.status === 'success' && !(await ui.$('.pausebar')), '"only when a CAPTCHA is on the page" skips the pause when there is none');
+
+    // ---------------------------------------------------- results back into the Excel + re-run failed rows
+    const ppl = await up('applicants.xlsx');
+    const wflow = await call('POST', '/flows', {
+      name: 'Writeback demo', start_url: `${base}/apply.html`,
+      steps: [
+        { id: 'g', type: 'goto', url: `${base}/apply.html` },
+        { id: 'n', type: 'type', value: '{{row.Name}}', target: css('#fullname') },
+        { id: 'c', type: 'type', value: '{{row.Case ID}}', target: css('#caseid') },
+        // fails on purpose for Bo Chen only
+        { id: 'x', type: 'wait', ms: 1500, target: css('#does-not-exist'), condition: { row: 'Name', op: 'equals', value: 'Bo Chen' } },
+        { id: 'b', type: 'click', target: css('#save') },
+        { id: 'r', type: 'extract_text', name: 'reference', target: css('#ref:not(:empty)') },
+      ],
+      data: { dataset_id: ppl.id, start_step_id: 'g' },
+    });
+    const [wres] = await ui.evaluate((flow) => window.autobrowser.runner.run({ flow, profileIds: [null], mode: 'exact' }), wflow);
+    const wrun = await call('GET', `/runs/${wres.runId}`);
+    const wrows = wrun.output.filter((o) => o.name === '_rows').flatMap((o) => o.data);
+    check(wrun.dataset_id === ppl.id && wrows.map((r) => r._status).join() === 'success,failed,success', 'data run remembers its data file; row 2 failed, others succeeded');
+    const wds = await call('GET', `/datasets/${ppl.id}`);
+    if (process.env.AB_DEBUG) console.log('DEBUG wds', JSON.stringify(wds.columns), JSON.stringify(wds.rows.slice(0, 3)), JSON.stringify(wrows));
+    check(wds.columns.includes('AutoBrowser status') && wds.rows[1]['AutoBrowser status'] === 'failed' && wds.rows[2].reference === 'Saved ref R-1003', 'statuses + extracted values stored in the data source');
+    const upd = await ui.evaluate(async (rid) => {
+      const b = await window.autobrowser.backend();
+      const r = await fetch(`http://127.0.0.1:${b.port}/runs/${rid}/updated-file`, { headers: { 'x-autobrowser-token': b.token } });
+      return { ok: r.ok, name: decodeURIComponent(r.headers.get('x-filename') || ''), size: (await r.arrayBuffer()).byteLength };
+    }, wres.runId);
+    if (process.env.AB_DEBUG) console.log('DEBUG upd', JSON.stringify(upd));
+    check(upd.ok && upd.name === 'applicants.xlsx' && upd.size > 1000, 'original Excel with results can be downloaded under its own name');
+    // re-run only the failed row from the Runs panel
+    await ui.evaluate(() => window.dispatchEvent(new Event('focus')));
+    if (!(await ui.isVisible('.panel h2:text("Runs")'))) await ui.click('.railbtn[data-tip="Runs & results"]');
+    await ui.click('.panel button[title="Refresh"], .panel button[aria-label="Refresh"]');
+    const card = ui.locator('.card', { hasText: 'Writeback demo' }).first();
+    await card.locator('button:has-text("Re-run 1 failed")').waitFor({ timeout: 10000 });
+    check(await card.locator('button:has-text("Your file + results")').isVisible(), 'Runs panel offers "Your file + results"');
+    screen('15-rerun-failed');
+    await card.locator('button:has-text("Re-run 1 failed")').click();
+    const rerun = await waitFor(async () => {
+      const list = await call('GET', '/runs?limit=3');
+      const r = list.find((x) => x.flow_id === wflow.id && x.id !== wres.runId && x.finished);
+      return r || null;
+    }, 'rerun finished', 60000);
+    const rr = rerun.output.filter((o) => o.name === '_rows').flatMap((o) => o.data);
+    check(rr.length === 1 && rr[0]._row === 2 && rr[0].Name === 'Bo Chen', 're-run processed only the failed row');
     await ui.click('.railbtn[data-tip="Accounts & logins"]');
     await sleep(400);
     screen('08-accounts');

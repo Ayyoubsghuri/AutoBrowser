@@ -32,6 +32,22 @@ export async function getBase64(path: string): Promise<string> {
   return btoa(bin);
 }
 
+/** Binary download plus the file name the server suggests (X-Filename). */
+export async function getFile(path: string): Promise<{ b64: string; name: string | null }> {
+  const { url, token } = await conn();
+  const res = await fetch(url + path, { headers: { 'x-autobrowser-token': token } });
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`;
+    try { msg = (await res.json()).detail || msg; } catch {}
+    throw new Error(msg);
+  }
+  const name = res.headers.get('x-filename');
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return { b64: btoa(bin), name: name ? decodeURIComponent(name) : null };
+}
+
 /** Read a local file picked by the user as base64 (for uploads). */
 export function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {

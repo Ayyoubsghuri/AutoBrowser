@@ -118,17 +118,18 @@ class Runner {
     return null;
   }
 
-  async runMany({ flow, profileIds, mode = 'exact', parallel = false }) {
+  async runMany({ flow, profileIds, mode = 'exact', parallel = false, rows = null }) {
     const ids = profileIds && profileIds.length ? profileIds : [null];
-    const jobs = ids.map((pid) => () => this.runOne({ flow, profileId: pid, mode }));
+    const jobs = ids.map((pid) => () => this.runOne({ flow, profileId: pid, mode, rows }));
     if (parallel) return Promise.all(jobs.map((j) => j()));
     const out = [];
     for (const j of jobs) out.push(await j());
     return out;
   }
 
-  async runOne({ flow, profileId, mode }) {
-    const run = await this.deps.api('POST', '/runs', { flow_id: flow.id, profile_id: profileId, mode: mode === 'exact' ? 'replay' : 'ai' });
+  async runOne({ flow, profileId, mode, rows = null }) {
+    const datasetId = flow.data && flow.data.dataset_id ? flow.data.dataset_id : null;
+    const run = await this.deps.api('POST', '/runs', { flow_id: flow.id, profile_id: profileId, mode, dataset_id: datasetId });
     const state = { stopped: false };
     this.active.set(run.id, state);
     const { emit } = this.deps;
@@ -161,7 +162,7 @@ class Runner {
         account = await this.deps.api('GET', `/profiles/${profileId}/secrets?site=${encodeURIComponent(site)}`).catch(() => ({}));
       }
       const ctx = {
-        wc, tab, mode, state, log, flowId: flow.id, profileId, runId: run.id,
+        wc, tab, mode, state, log, flowId: flow.id, profileId, runId: run.id, onlyRows: rows,
         vars: { ...builtinVars(), account, vars: {} },
         output: (name, data) => {
           outBuf.push({ name, data, url: wc.getURL(), profile_id: profileId, t: Date.now() });
@@ -183,6 +184,8 @@ class Runner {
       clearInterval(flushTimer);
       this.active.delete(run.id);
       await flush({ status, finished: true });
+      // remember each row's status in the data source ('skip rows already done', re-runs)
+      if (datasetId) await this.deps.api('POST', `/runs/${run.id}/apply-to-data`).catch(() => {});
       emit('run:status', { runId: run.id, flowId: flow.id, profileId, status });
     }
     return { runId: run.id, status };
@@ -193,7 +196,9 @@ class Runner {
   // Data-driven run: steps before `start_step_id` run once (login…), the rest once per row.
   async runRows(ctx, flow, steps, runId) {
     const cfg = flow.data;
-    const { rows, total } = await this.deps.api('GET', `/flows/${flow.id}/data-rows`);
+    const only = ctx.onlyRows && ctx.onlyRows.length ? `?rows=${ctx.onlyRows.join(',')}` : '';
+    const { rows, total } = await this.deps.api('GET', `/flows/${flow.id}/data-rows${only}`);
+    if (only) ctx.log('info', `Re-running ${rows.length} selected row(s)`);
     let start = cfg.start_step_id ? steps.findIndex((s) => s.id === cfg.start_step_id) : 0;
     if (start < 0) { ctx.log('warn', 'The "repeat from here" step was not found; repeating the whole flow for each row'); start = 0; }
     const once = steps.slice(0, start);
@@ -223,14 +228,14 @@ class Runner {
         message = e.message || String(e);
         if (status === 'failed') { failed++; ctx.log('error', `Row ${num} failed: ${message}`); }
         if (e instanceof StopError || cfg.stop_on_error) {
-          ctx.output('_rows', [{ ...flattenRow(row), _row: num, _status: status, _message: message, ...ctx.rowResult }]);
+          ctx.output('_rows', [{ ...flattenRow(row), _row: num, _status: status, _message: message, ...ctx.rowResult, _extracted: Object.keys(ctx.rowResult || {}) }]);
           ctx.rowResult = null;
           progress(i + 1);
           if (e instanceof StopError) throw e;
           throw new Error(`Stopped at row ${num} (stop on first error is on)`);
         }
       }
-      ctx.output('_rows', [{ ...flattenRow(row), _row: num, _status: status, _message: message, ...ctx.rowResult }]);
+      ctx.output('_rows', [{ ...flattenRow(row), _row: num, _status: status, _message: message, ...ctx.rowResult, _extracted: Object.keys(ctx.rowResult || {}) }]);
       ctx.rowResult = null;
     }
     progress(rows.length);

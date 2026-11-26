@@ -28,7 +28,7 @@ def _public(d: dict, full: bool = False) -> dict:
         "row_count": len(d["rows"]), "rows": d["rows"] if full else d["rows"][:MAX_PREVIEW],
         "sheets": meta.get("sheets", []), "sheet": meta.get("sheet"), "header_row": meta.get("header_row", 1),
         "files": [{"name": f["name"], "pages": f.get("pages"), "form_fields": list(f.get("fields", {}).keys())} for f in meta.get("files", [])],
-        "rules": meta.get("rules", []), "created": d["created"], "updated": d["updated"],
+        "rules": meta.get("rules", []), "source_path": meta.get("source_path"), "created": d["created"], "updated": d["updated"],
     }
     return out
 
@@ -104,7 +104,8 @@ def upload(body: DatasetUpload):
     folder = FILES / did
     folder.mkdir(parents=True, exist_ok=True)
     (folder / Path(f.filename).name).write_bytes(content)  # kept locally to switch sheet / header row later
-    meta = {"filename": Path(f.filename).name, "sheets": parsed["sheets"], "sheet": parsed["sheet"], "header_row": parsed["header_row"]}
+    meta = {"filename": Path(f.filename).name, "sheets": parsed["sheets"], "sheet": parsed["sheet"], "header_row": parsed["header_row"],
+            "source_path": body.source_path}
     name = body.name or Path(f.filename).stem + (f" · {parsed['sheet']}" if len(parsed["sheets"]) > 1 else "")
     return _public(_save(did, name, parsed["kind"], parsed["columns"], parsed["rows"], meta, new=True))
 

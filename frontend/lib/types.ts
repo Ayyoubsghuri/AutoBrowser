@@ -81,7 +81,7 @@ export type RunLog = { runId: string; flowId: string; profileId: string | null; 
 export type Run = {
   id: string; flow_id: string | null; profile_id: string | null; mode: string; status: string;
   log: { t: number; level: string; msg: string }[]; output: { name: string; data: unknown }[];
-  started: number; finished: number | null;
+  started: number; finished: number | null; dataset_id?: string | null;
 };
 
 export type ProviderInfo = { has_key: boolean; model: string; base_url?: string };
@@ -128,6 +128,7 @@ export type Dataset = {
   header_row: number;
   files: { name: string; pages?: number; form_fields: string[] }[];
   rules: PdfRule[];
+  source_path?: string | null;
 };
 
 export type PdfRule = { name: string; kind: 'form_field' | 'after_label' | 'regex' | 'value'; pattern?: string; values?: Record<string, string> };
@@ -140,6 +141,7 @@ export type FlowData = {
   filter?: { column: string; op: FilterOp; value?: string | null } | null;
   start_step_id?: string | null;
   stop_on_error?: boolean;
+  skip_done?: boolean;
   first_row?: number;
   max_rows?: number | null;
 };

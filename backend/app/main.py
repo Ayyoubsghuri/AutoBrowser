@@ -20,6 +20,7 @@ def create_app() -> FastAPI:
         allow_origins=["app://autobrowser", "http://localhost:3000"],
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Filename", "Content-Disposition"],
     )
 
     @app.middleware("http")

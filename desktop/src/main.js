@@ -440,8 +440,8 @@ handle('tabs:show-firefox', (id) => { const t = tabs.get(id ?? activeTabId); if 
 handle('runner:stop', (runId) => runner.stop(runId));
 handle('runner:resume', (runId, action) => runner.resume(runId, action));
 handle('shell:open', (url) => { if (/^https?:/.test(url)) shell.openExternal(url); });
-handle('file:save', async ({ name, content, base64 }) => {
-  const r = await dialog.showSaveDialog(win, { defaultPath: path.join(app.getPath('downloads'), name) });
+handle('file:save', async ({ name, content, base64, defaultPath }) => {
+  const r = await dialog.showSaveDialog(win, { defaultPath: defaultPath || path.join(app.getPath('downloads'), name) });
   if (r.canceled || !r.filePath) return null;
   fs.writeFileSync(r.filePath, base64 ? Buffer.from(content, 'base64') : content);
   return r.filePath;

@@ -82,6 +82,7 @@ class DatasetUpload(BaseModel):
     sheet: Optional[str] = None
     header_row: int = 1
     dataset_id: Optional[str] = Field(default=None, description="Add PDFs to an existing PDF dataset")
+    source_path: Optional[str] = Field(default=None, description="Where the file is on this computer (to save results next to it)")
 
 
 class PdfRule(BaseModel):
@@ -118,6 +119,7 @@ class FlowData(BaseModel):
     filter: Optional[RowFilter] = None
     start_step_id: Optional[str] = None   # steps before it run once (e.g. login); from it on, once per row
     stop_on_error: bool = False
+    skip_done: bool = False               # skip rows whose 'AutoBrowser status' is success
     first_row: int = 1                    # 1-based, inclusive
     max_rows: Optional[int] = None
 
@@ -186,7 +188,8 @@ class CompileIn(BaseModel):
 class RunIn(BaseModel):
     flow_id: Optional[str] = None
     profile_id: Optional[str] = None
-    mode: Literal["replay", "ai"] = "replay"
+    mode: Literal["replay", "ai", "exact", "assist", "compiled"] = "exact"
+    dataset_id: Optional[str] = None
 
 
 class RunPatch(BaseModel):

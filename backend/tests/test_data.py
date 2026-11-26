@@ -62,7 +62,7 @@ def test_excel_sheets_header_and_types(client):
     assert d["kind"] == "excel" and d["sheets"] == ["Notes", "People"] and d["sheet"] == "Notes"
     d = client.patch(f"/datasets/{d['id']}", json={"sheet": "People"}).json()
     assert d["columns"] == ["Case ID", "Name", "Agree", "Date"] and d["row_count"] == 3
-    assert d["rows"][0] == {"Case ID": "1001", "Name": "Ana Lima", "Agree": "yes", "Date": "2024-05-01"}
+    assert d["rows"][0] == {"Case ID": "1001", "Name": "Ana Lima", "Agree": "yes", "Date": "2024-05-01", "_line": 2}
 
 
 def test_join_filter_and_flow_rows(client):
@@ -137,3 +137,59 @@ def test_results_xlsx(client):
     ws = openpyxl.load_workbook(io.BytesIO(data))["Rows"]
     rows = list(ws.iter_rows(values_only=True))
     assert rows[0][:3] == ("_row", "_status", "_message") and rows[2][1] == "failed" and "confirmation" in rows[0]
+
+
+def test_results_written_back_into_original_excel_and_rerun_failed(client):
+    import datetime as dt
+    from openpyxl.styles import Font
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "People"
+    ws.append(["My export"])          # title line above the header
+    ws.append(["Case ID", "Name", "Agree", "Date"])
+    ws["A2"].font = Font(bold=True, color="FF0000")
+    ws.append([1001, "Ana Lima", "yes", dt.datetime(2024, 5, 1)])
+    ws.append([])                     # blank line in the middle
+    ws.append([1002, "Bo Chen", "", None])
+    ws.append([1003, "Cy Diaz", "x", None])
+    buf = io.BytesIO(); wb.save(buf)
+    d = upload(client, "people.xlsx", buf.getvalue(), header_row=2)
+    assert d["row_count"] == 3 and [r["_line"] for r in d["rows"]] == [3, 5, 6]
+
+    flow = client.post("/flows", json={"name": "Fill", "steps": [], "data": {"dataset_id": d["id"]}}).json()
+    run = client.post("/runs", json={"flow_id": flow["id"], "mode": "exact", "dataset_id": d["id"]}).json()
+    rows = client.get(f"/flows/{flow['id']}/data-rows").json()["rows"]
+    out = [
+        {**rows[0], "_status": "success", "_message": "", "reference": "R-1001", "_extracted": ["reference"]},
+        {**rows[1], "_status": "failed", "_message": "field not found", "_extracted": []},
+        {**rows[2], "_status": "success", "_message": "", "reference": "R-1003", "_extracted": ["reference"]},
+    ]
+    client.patch(f"/runs/{run['id']}", json={"output": [{"name": "_rows", "data": out}], "status": "success", "finished": True})
+
+    r = client.get(f"/runs/{run['id']}/updated-file")
+    assert r.status_code == 200 and "people.xlsx" in r.headers["x-filename"]
+    got = openpyxl.load_workbook(io.BytesIO(r.content))["People"]
+    assert [c.value for c in got[2]] == ["Case ID", "Name", "Agree", "Date", "AutoBrowser status", "AutoBrowser message", "reference"]
+    assert got["A2"].font.bold and got["A1"].value == "My export"          # formatting and other lines kept
+    assert [got.cell(row=n, column=5).value for n in (3, 5, 6)] == ["success", "failed", "success"]
+    assert got.cell(row=5, column=6).value == "field not found" and got.cell(row=6, column=7).value == "R-1003"
+    assert got.cell(row=4, column=5).value is None                          # the blank line stays blank
+
+    # re-run only the failed row
+    again = client.get(f"/flows/{flow['id']}/data-rows", params={"rows": "2"}).json()
+    assert again["total"] == 1 and again["rows"][0]["Name"] == "Bo Chen"
+
+    # statuses stored in the data source -> 'skip rows already done'
+    assert client.post(f"/runs/{run['id']}/apply-to-data").json()["rows_updated"] == 3
+    client.patch(f"/flows/{flow['id']}", json={"data": {"dataset_id": d["id"], "skip_done": True}})
+    left = client.get(f"/flows/{flow['id']}/data-rows").json()
+    assert left["total"] == 1 and left["rows"][0]["Name"] == "Bo Chen" and left["rows"][0]["AutoBrowser message"] == "field not found"
+
+
+def test_results_written_back_into_csv(client):
+    d = upload(client, "extra.csv", EXTRA.encode())
+    run = client.post("/runs", json={"mode": "exact", "dataset_id": d["id"]}).json()
+    client.patch(f"/runs/{run['id']}", json={"output": [{"name": "_rows", "data": [
+        {"_row": 2, "_line": 3, "_status": "success", "_message": "", "_extracted": []}]}]})
+    text = client.get(f"/runs/{run['id']}/updated-file").content.decode("utf-8-sig").splitlines()
+    assert text[0] == "case;city;phone;AutoBrowser status;AutoBrowser message" and text[2].startswith("1003;Fes;0700;success")
