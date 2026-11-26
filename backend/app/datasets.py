@@ -163,10 +163,11 @@ def default_pdf_rules(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def pdf_table(files: list[dict[str, Any]], rules: list[dict[str, Any]]) -> tuple[list[str], list[dict[str, str]]]:
-    columns = ["_file"] + [r["name"] for r in rules if r.get("name")]
+    # file_path: where the PDF is kept on this computer, so a flow can upload it ({{row.file_path}})
+    columns = ["_file", "file_path"] + [r["name"] for r in rules if r.get("name")]
     rows = []
     for f in files:
-        row = {"_file": f["name"]}
+        row = {"_file": f["name"], "file_path": f.get("path", "")}
         for r in rules:
             if r.get("name"):
                 row[r["name"]] = apply_rule(r, f)

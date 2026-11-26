@@ -14,7 +14,7 @@ export type Target = {
 
 export type StepType =
   | 'goto' | 'click' | 'type' | 'select' | 'check' | 'press' | 'scroll' | 'wait'
-  | 'extract_table' | 'extract_text' | 'login' | 'loop' | 'if' | 'ai' | 'pause';
+  | 'extract_table' | 'extract_text' | 'login' | 'loop' | 'if' | 'ai' | 'pause' | 'tab' | 'upload' | 'download';
 
 export type Step = {
   id: string;
@@ -41,6 +41,8 @@ export type Step = {
   in_list?: { row_selector: string; index: number; count: number; inner: string; link: string | null; list_url: string };
   /** The click a for-each-item loop replaced (to undo the conversion). */
   origin_click?: Step;
+  /** download steps: folder to save into (default Downloads/AutoBrowser/<flow name>) */
+  folder?: string;
   condition?: Record<string, unknown>;
   steps?: Step[];
   ts?: number;

@@ -489,6 +489,113 @@ function screen(name) {
     }, 'rerun finished', 60000);
     const rr = rerun.output.filter((o) => o.name === '_rows').flatMap((o) => o.data);
     check(rr.length === 1 && rr[0]._row === 2 && rr[0].Name === 'Bo Chen', 're-run processed only the failed row');
+
+    // ---------------------------------------------------- pop-up windows: recording + runs follow them
+    await ui.fill('.address input', `${base}/popup.html`);
+    await ui.press('.address input', 'Enter');
+    const shop = await tabPage(/popup\.html/);
+    await shop.waitForSelector('#pay');
+    if (!(await ui.isVisible('.panel button[title="Clear"]'))) await ui.click('.railbtn[data-tip="Recorder"]');
+    ui.once('dialog', (d) => d.accept());
+    await ui.click('button[title="Clear"]');
+    await waitFor(async () => (await ui.evaluate(() => localStorage.getItem('ab.recorder.draft'))) === '[]', 'cleared');
+    await ui.click('.recbtn');
+    await ui.waitForSelector('.recbtn.live');
+    await sleep(300);
+    await shop.click('#pay');
+    const bank = await tabPage(/confirm\.html/);
+    await bank.waitForSelector('#what:not(:empty)');
+    check(await ui.isVisible('.tab.active:has-text("Confirm payment")'), 'pop-up window opened as a tab and became active');
+    await sleep(500);
+    await bank.click('#confirm');
+    await shop.waitForSelector('#status:text("Paid 7")', { timeout: 10000 });
+    check(true, 'pop-up kept its link to the opener (postMessage reached the checkout page)');
+    await waitFor(async () => !app.windows().some((w) => /confirm\.html/.test(w.url())), 'pop-up closed itself');
+    await sleep(500);
+    await ui.click('.tool:has-text("Pick text")');
+    await sleep(300);
+    await shop.click('#status');
+    await sleep(500);
+    await ui.click('.recbtn');
+    const psteps = JSON.parse(await ui.evaluate(() => localStorage.getItem('ab.recorder.draft')));
+    console.log('  recorded:', psteps.map((s) => `${s.type}${s.target?.text ? `("${s.target.text}")` : ''}`).join(' → '));
+    check(psteps.filter((s) => s.type === 'click').length === 2 && psteps.some((s) => s.type === 'click' && /Confirm/.test(s.target?.text || '')), 'recorder followed into the pop-up (Confirm click recorded)');
+    check(psteps.some((s) => s.type === 'extract_text'), 'recorder came back to the checkout page after the pop-up closed');
+    const popFlow = await call('POST', '/flows', { name: 'Pay in pop-up', start_url: `${base}/popup.html`, steps: psteps });
+    const [pres2] = await ui.evaluate((flow) => window.autobrowser.runner.run({ flow, profileIds: [null], mode: 'exact' }), popFlow);
+    const prun2 = await call('GET', `/runs/${pres2.runId}`);
+    if (pres2.status !== 'success') console.log(prun2.log.map((l) => `    ${l.level}: ${l.msg}`).join('\n'));
+    check(pres2.status === 'success' && prun2.output.some((o) => o.data === 'Paid 7'), 'run followed the pop-up, confirmed, came back and read "Paid 7"');
+    check(prun2.log.some((l) => /opened a new tab/.test(l.msg)) && prun2.log.some((l) => /back to the previous page/.test(l.msg)), 'run log shows the switch to the pop-up and back');
+
+    // ---------------------------------------------------- file upload + download per row
+    const recordOn = async (url, pageRe, actions) => {
+      await ui.fill('.address input', url);
+      await ui.press('.address input', 'Enter');
+      const pg = await tabPage(pageRe);
+      await pg.waitForLoadState('load');
+      if (!(await ui.isVisible('.panel button[title="Clear"]'))) await ui.click('.railbtn[data-tip="Recorder"]');
+      ui.once('dialog', (d) => d.accept());
+      await ui.click('button[title="Clear"]');
+      await waitFor(async () => (await ui.evaluate(() => localStorage.getItem('ab.recorder.draft'))) === '[]', 'cleared');
+      await ui.click('.recbtn');
+      await ui.waitForSelector('.recbtn.live');
+      await sleep(300);
+      await actions(pg);
+      await sleep(600);
+      await ui.click('.recbtn');
+      return JSON.parse(await ui.evaluate(() => localStorage.getItem('ab.recorder.draft')));
+    };
+    const usteps = await recordOn(`${base}/upload.html`, /upload\.html/, async (pg) => {
+      await pg.click('label.pick').catch(() => {}); // the system dialog would open here; tests set the file directly
+      await pg.setInputFiles('#doc', path.join(FIX, 'doc_a.pdf'));
+      await sleep(300);
+      await pg.click('#send');
+    });
+    console.log('  recorded:', usteps.map((s) => `${s.type}${s.value ? `(${s.value})` : ''}`).join(' → '));
+    check(usteps.some((s) => s.type === 'upload' && s.value === 'doc_a.pdf'), 'choosing a file was recorded as an upload step');
+    check(!usteps.some((s) => s.type === 'click' && /Choose PDF/.test(s.target?.text || '')), 'the click that opens the file dialog is not replayed');
+    // upload each PDF of a PDF data source into the form
+    const b64f = (f) => fs.readFileSync(path.join(FIX, f)).toString('base64');
+    const pdfs = await call('POST', '/datasets', { files: [{ filename: 'doc_a.pdf', content_b64: b64f('doc_a.pdf') }, { filename: 'doc_b.pdf', content_b64: b64f('doc_b.pdf') }] });
+    check(pdfs.columns.includes('file_path'), 'PDF data source offers file_path for uploads');
+    const upFlow = await call('POST', '/flows', {
+      name: 'Upload PDFs', start_url: `${base}/upload.html`, data: { dataset_id: pdfs.id, start_step_id: 'g' },
+      steps: [
+        { id: 'g', type: 'goto', url: `${base}/upload.html` },
+        { id: 'u', type: 'upload', value: '{{row.file_path}}', target: css('#doc') },
+        { id: 's', type: 'click', target: css('#send') },
+        { id: 'r', type: 'extract_text', name: 'result', target: css('#result:not(:empty)') },
+      ],
+    });
+    const [ures] = await ui.evaluate((flow) => window.autobrowser.runner.run({ flow, profileIds: [null], mode: 'exact' }), upFlow);
+    const urun = await call('GET', `/runs/${ures.runId}`);
+    if (ures.status !== 'success') console.log(urun.log.map((l) => `    ${l.level}: ${l.msg}`).join('\n'));
+    const ur = urun.output.filter((o) => o.name === '_rows').flatMap((o) => o.data);
+    console.log('  upload results:', JSON.stringify(ur.map((r) => r.result)));
+    check(ures.status === 'success' && ur.length === 2 && ur.every((r) => /^Received doc_[ab]\.pdf, \d+ bytes, starts with %PDF-$/.test(r.result)), 'each row uploaded its own PDF (real file content, hidden file field)');
+
+    // downloads: the recorder turns the click into a download step; runs save one file per row
+    const dsteps = await recordOn(`${base}/download.html?id=7`, /download\.html/, async (pg) => { await pg.click('#get'); });
+    check(dsteps.some((s) => s.type === 'download' && s.value === 'receipt.txt'), 'a click that downloaded a file was recorded as a download step');
+    const dlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-dl-'));
+    const dlData = await up('applicants.xlsx');
+    const dlFlow = await call('POST', '/flows', {
+      name: 'Receipts', data: { dataset_id: dlData.id, start_step_id: 'g' },
+      steps: [
+        { id: 'g', type: 'goto', url: `${base}/download.html?id={{row.Case ID}}` },
+        { id: 'd', type: 'download', value: 'receipt_{{row.Case ID}}', folder: dlDir, target: css('#get') },
+      ],
+    });
+    const [dres] = await ui.evaluate((flow) => window.autobrowser.runner.run({ flow, profileIds: [null], mode: 'exact' }), dlFlow);
+    const drun2 = await call('GET', `/runs/${dres.runId}`);
+    if (dres.status !== 'success') console.log(drun2.log.map((l) => `    ${l.level}: ${l.msg}`).join('\n'));
+    const files = fs.readdirSync(dlDir).sort();
+    console.log('  downloaded:', files.join(', '));
+    check(dres.status === 'success' && files.join() === 'receipt_1001.txt,receipt_1002.txt,receipt_1003.txt', 'one file per row, named from the row (site extension kept)');
+    check(fs.readFileSync(path.join(dlDir, 'receipt_1003.txt'), 'utf8') === 'Receipt for case 1003', 'downloaded file has the right content');
+    const dr = drun2.output.filter((o) => o.name === '_rows').flatMap((o) => o.data);
+    check(dr.length === 3 && dr[0].download === path.join(dlDir, 'receipt_1001.txt'), 'saved path recorded in each row\'s results');
     await ui.click('.railbtn[data-tip="Accounts & logins"]');
     await sleep(400);
     screen('08-accounts');

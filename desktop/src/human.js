@@ -7,6 +7,7 @@ const gauss = () => (Math.random() + Math.random() + Math.random()) / 3; // ~nor
 
 const lastPos = new WeakMap();
 const flush = (wc) => (wc.flushInput ? wc.flushInput() : undefined);
+const gone = (wc) => typeof wc.isDestroyed === 'function' && wc.isDestroyed();
 
 class Human {
   constructor(getSpeed = () => 1) {
@@ -46,10 +47,10 @@ class Human {
     for (let n = 1; n <= clickCount; n++) {
       wc.sendInputEvent({ type: 'mouseDown', x, y, button, clickCount: n });
       await sleep(rand(45, 120) * this.getSpeed());
-      wc.sendInputEvent({ type: 'mouseUp', x, y, button, clickCount: n });
+      if (!gone(wc)) wc.sendInputEvent({ type: 'mouseUp', x, y, button, clickCount: n });
       if (n < clickCount) await sleep(rand(60, 110));
     }
-    await flush(wc);
+    if (!gone(wc)) await flush(wc);
   }
 
   async key(wc, keyCode, modifiers = []) {

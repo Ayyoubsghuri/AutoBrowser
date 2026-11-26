@@ -536,6 +536,8 @@ function onClick(e) {
   const el = raw && raw.nodeType === 1 ? raw : e.target;
   if (mode === 'record') {
     if (isTextInput(el) || el.tagName === 'SELECT' || el.tagName === 'OPTION') return;
+    // clicking a file field only opens the system dialog; the chosen file is recorded as an upload step
+    if (isFileField(el) || (el.closest('label') && isFileField(el.closest('label').control))) return;
     flushPending();
     const toggle = toggleControl(el);
     if (toggle) {
@@ -593,9 +595,16 @@ function onInput(e) {
   if (!pending) pending = { el, target: buildTarget(el) };
 }
 
+function isFileField(el) { return !!el && el.tagName === 'INPUT' && (el.type || '').toLowerCase() === 'file'; }
+
 function onChange(e) {
   if (mode !== 'record' || !e.isTrusted) return;
   const el = e.target;
+  if (isFileField(el)) {
+    const names = Array.from(el.files || []).map((f) => f.name);
+    if (names.length) emit({ type: 'upload', target: buildTarget(el), value: names.join('; '), sample: names.join('; ') });
+    return;
+  }
   if (el.tagName === 'SELECT') {
     const opt = el.selectedOptions[0];
     emit({ type: 'select', target: buildTarget(el), value: el.value, label: opt ? clean(opt.text) : undefined });
@@ -687,6 +696,17 @@ const commands = {
     }
     if (/^(just a moment|attention required|verify you are human)/i.test(document.title)) return { found: true, kind: 'Cloudflare' };
     return { found: false };
+  },
+  markElement({ target, scope, token }) {
+    const el = findElement(target, scope);
+    if (!el) return { found: false };
+    el.setAttribute('data-ab-file', token);
+    return { found: true, tag: el.tagName.toLowerCase(), type: (el.getAttribute('type') || '').toLowerCase() };
+  },
+  unmarkElement({ token }) {
+    const el = document.querySelector(`[data-ab-file="${token}"]`);
+    if (el) el.removeAttribute('data-ab-file');
+    return true;
   },
   checkState({ target, scope }) {
     const el = findElement(target, scope);

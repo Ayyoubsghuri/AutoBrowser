@@ -31,6 +31,7 @@ export interface Bridge {
   };
   openExternal(url: string): Promise<void>;
   saveFile(o: { name: string; content: string; base64?: boolean; defaultPath?: string | null }): Promise<string | null>;
+  pickFiles(o?: { multiple?: boolean }): Promise<string[]>;
   pathForFile?(file: File): string | null;
   on(channel: string, cb: (payload: any) => void): Unsub;
 }
@@ -76,6 +77,7 @@ function mockBridge(): Bridge {
     },
     runner: { run: async () => [], stop: noop, resume: async () => false },
     openExternal: async (u) => { window.open(u, '_blank'); },
+    pickFiles: async () => [],
     saveFile: async ({ name, content, base64 }) => {
       const a = document.createElement('a');
       const data = base64 ? Uint8Array.from(atob(content), (c) => c.charCodeAt(0)) : content;

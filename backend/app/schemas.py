@@ -26,6 +26,9 @@ StepType = Literal[
     "loop",          # repeat child steps: over table rows, or until a selector disappears (pagination)
     "if",            # run child steps when a selector exists / text matches
     "ai",            # resolve at run time with the AI agent (needs API key)
+    "upload",        # put file(s) into a file field: value = path(s) separated by ';' (or {{row.file_path}})
+    "download",      # click target, save the file it downloads as `value` (file name template)
+    "tab",           # value 'close': close the current (pop-up) tab and go back; 'back': switch back
     "pause",         # wait for a person (CAPTCHA, SMS code, final check); value = message
 ]
 

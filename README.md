@@ -73,6 +73,37 @@ original steps. "Build with AI" can also produce this loop from a goal like *"pr
 5. **Run**: progress shows per row. Under **Runs** → **Excel**, you get your rows back with `_status`, `_message` and
    any values extracted per row (e.g. the confirmation number the site showed).
 
+### Formatting values
+Add a filter after any value: `{{row.Date | date:DD/MM/YYYY}}`, `{{row.Name | upper}}`, `{{row.Phone | digits}}`,
+`{{row.Amount | number:2}}`, `{{row.City | default:"Rabat"}}`. Step cards have a **ƒ format…** menu and show a live
+preview for the current row. Filters: `upper lower title trim digits nospace first last slice:a:b replace:"x":"y"
+split:" ":1 pad:6 prefix:"+" suffix:"" default:"-" number:2 yesno:Oui:Non date:<format> parsedate:<input format>`.
+Excel date numbers and day-first dates (31/12/2024) are understood.
+
+### When a person is needed
+- **Pause for me** step (Recorder → *Add "pause for me" step*): the run stops with your message, the tab comes to
+  the front, the taskbar flashes and Windows shows a notification. Then choose **Continue**, **Skip this row**
+  or **Stop**. Tick *only when a CAPTCHA is on the page* to pause only when needed.
+- If a step fails while a **CAPTCHA** is visible (reCAPTCHA, hCaptcha, Cloudflare…), the run pauses by itself,
+  and after you solve it and press Continue, the step is tried again.
+
+### Results back into your file
+After a data run, **Runs → Your file + results** saves your original Excel (formatting kept) or CSV with
+`AutoBrowser status`, `AutoBrowser message` and anything picked up per row (e.g. the reference number). The
+save dialog starts at the file's original location. **Re-run N failed** repeats only the rows that failed or were
+skipped. Statuses are also kept in the data source, so the flow option **skip rows already done** works across runs.
+
+### Pop-ups, uploads and downloads
+- Windows and tabs opened by the site (payment, confirmation, print pages) are followed by recordings and
+  runs, and they return to the original page when the pop-up closes. The link between the two pages is kept,
+  so sites that talk to their pop-ups keep working.
+- **Upload:** choosing a file in a site's file field is recorded as an upload step. Set a full path, choose files
+  with 📂, or use a column. PDF data sources provide `{{row.file_path}}`, so each row can upload its own PDF. No
+  file dialog opens during runs.
+- **Download:** a click that downloads a file is recorded as a download step. Name the file per row, e.g.
+  `receipt_{{row.Case ID}}` (the site's extension is kept). Files go to `Downloads\AutoBrowser\<flow name>` or a
+  folder you choose, and the saved path is added to the row's results.
+
 ### AI providers
 Pick one in **Settings → AI**; each keeps its own encrypted key and model:
 

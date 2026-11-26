@@ -14,6 +14,9 @@ const { FirefoxEngine } = require('./firefox');
 const template = require('./template');
 
 const DEV = !!process.env.AB_DEV;
+// Never freeze the app with an error dialog: log and keep going (a tab closing mid-step is normal).
+process.on('uncaughtException', (e) => console.error('[main] uncaught', e && e.stack ? e.stack : e));
+process.on('unhandledRejection', (e) => console.error('[main] unhandled', e && e.stack ? e.stack : e));
 if (process.env.AB_USER_DATA) app.setPath('userData', process.env.AB_USER_DATA);
 const UI_DEV_URL = process.env.AB_UI_URL || 'http://localhost:3000';
 const UI_ORIGIN = 'app://autobrowser';
@@ -115,9 +118,18 @@ function configureSession(partition, profile) {
     cb(['clipboard-sanitized-write', 'fullscreen', 'pointerLock', 'notifications', 'media', 'geolocation'].includes(permission));
   });
 
-  ses.on('will-download', (_e, item) => {
-    item.setSavePath(path.join(app.getPath('downloads'), item.getFilename()));
+  ses.on('will-download', (_e, item, wc) => {
+    const expected = wc && pendingDownloads.get(wc);
+    if (expected) {
+      // a running flow's download step: save under the name the flow chose
+      pendingDownloads.delete(wc);
+      item.setSavePath(expected.pathFor(item.getFilename()));
+      item.once('done', (_ev, state) => (state === 'completed' ? expected.resolve(item.getSavePath()) : expected.reject(new Error(`download ${state}`))));
+      return;
+    }
+    item.setSavePath(uniqueDownloadPath(app.getPath('downloads'), item.getFilename()));
     item.once('done', (_ev, state) => sendUI('download:done', { file: item.getSavePath(), state }));
+    noteRecordedDownload(wc, item.getFilename());
   });
   return ses;
 }
@@ -133,6 +145,37 @@ app.on('login', (event, _wc, details, authInfo, cb) => {
     }
   }
 });
+
+// ------------------------------------------------------------------ downloads
+const pendingDownloads = new Map(); // webContents -> {pathFor, resolve, reject}
+
+function uniqueDownloadPath(dir, name) {
+  let p = path.join(dir, name);
+  const ext = path.extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  for (let i = 1; fs.existsSync(p); i++) p = path.join(dir, `${stem} (${i})${ext}`);
+  return p;
+}
+
+// Runner: the next download from this tab is saved at pathFor(suggestedName).
+function expectDownload(wc, pathFor, timeout = 90000) {
+  if (wc.expectDownload) return wc.expectDownload(pathFor, timeout); // Firefox
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { pendingDownloads.delete(wc); reject(new Error('no download started')); }, timeout);
+    pendingDownloads.set(wc, {
+      pathFor,
+      resolve: (p) => { clearTimeout(timer); resolve(p); },
+      reject: (e) => { clearTimeout(timer); reject(e); },
+    });
+  });
+}
+
+// Recorder: a click that downloads a file becomes a "download" step.
+function noteRecordedDownload(wc, filename) {
+  if (!recording) return;
+  const t = tabs.get(recording.tabId);
+  if (t && t.view.webContents === wc) sendUI('rec:download', { filename, ts: Date.now() });
+}
 
 // ------------------------------------------------------------------ UI <-> main
 function sendUI(channel, payload) {
@@ -185,23 +228,18 @@ async function createFirefoxTab({ url, profileId = null, activate = true } = {})
     upd();
     if (recording && recording.tabId === id && u !== 'about:blank') sendUI('rec:navigated', { tabId: id, url: u, ts: Date.now() });
   });
-  wc.on('destroyed', () => {
-    if (!tabs.has(id)) return;
-    if (recording && recording.tabId === id) stopRecording();
-    tabs.delete(id);
-    if (activeTabId === id) activeTabId = [...tabs.keys()].pop() ?? null;
-    if (!tabs.size) createTab({ profileId: null });
-    layout(); pushTabs();
-  });
+  wc.on('destroyed', () => { if (tabs.has(id)) closeTab(id, { fromPage: true }); });
   if (activate) activateTab(id); else layout();
   pushTabs();
   return tab;
 }
 
-function createChromiumTab({ url, profileId = null, activate = true } = {}) {
+function createChromiumTab({ url, profileId = null, activate = true, popupOptions = null, openerId = null } = {}) {
   const partition = partitionFor(profileId);
   configureSession(partition, profiles.get(profileId));
   const view = new WebContentsView({
+    // a page-opened window keeps its link to the opener (window.opener / postMessage)
+    ...(popupOptions && popupOptions.webContents ? { webContents: popupOptions.webContents } : {}),
     webPreferences: {
       partition,
       preload: path.join(__dirname, 'preload-page.js'),
@@ -217,15 +255,25 @@ function createChromiumTab({ url, profileId = null, activate = true } = {}) {
   if (view.setBorderRadius) view.setBorderRadius(14);
   view.setBackgroundColor('#ffffff');
   const id = nextTabId++;
-  const tab = { id, view, profileId, partition, title: 'New tab', url: '', favicon: null, loading: false };
+  const tab = { id, view, profileId, partition, title: 'New tab', url: '', favicon: null, loading: false, openerId };
   tabs.set(id, tab);
   win.contentView.addChildView(view);
   const wc = view.webContents;
 
-  wc.setWindowOpenHandler(({ url: u }) => {
-    createTab({ url: u, profileId, activate: true });
-    return { action: 'deny' };
+  wc.setWindowOpenHandler(({ url: u, disposition }) => {
+    if (disposition === 'background-tab') { createTab({ url: u, profileId, activate: false }); return { action: 'deny' }; }
+    return {
+      action: 'allow',
+      createWindow: (options) => {
+        const nt = createChromiumTab({ profileId, activate: true, popupOptions: options, openerId: id });
+        nt.url = u;
+        onPopupOpened(tab, nt);
+        return nt.view.webContents;
+      },
+    };
   });
+  // window.close() from the page
+  wc.on('destroyed', () => { if (tabs.has(id)) closeTab(id, { fromPage: true }); });
   const upd = () => { tab.url = wc.getURL(); tab.title = wc.getTitle() || tab.url; pushTabs(); layout(); };
   wc.on('page-title-updated', upd);
   wc.on('did-start-loading', () => { tab.loading = true; pushTabs(); });
@@ -258,7 +306,7 @@ function createChromiumTab({ url, profileId = null, activate = true } = {}) {
     ]).popup();
   });
 
-  if (url) wc.loadURL(url).catch(() => {});
+  if (url && !popupOptions) wc.loadURL(url).catch(() => {});
   tab.url = url || '';
   if (activate) activateTab(id); else layout();
   pushTabs();
@@ -279,13 +327,23 @@ function activateTab(id) {
   pushTabs();
 }
 
-function closeTab(id) {
+function closeTab(id, { fromPage = false } = {}) {
   const t = tabs.get(id);
   if (!t) return;
-  if (recording && recording.tabId === id) stopRecording();
+  if (recording && recording.tabId === id) {
+    if (t.openerId && tabs.has(t.openerId)) {
+      // recording follows back to the page that opened this one
+      if (!fromPage) sendUI('rec:step', { type: 'tab', value: 'close', ts: Date.now() });
+      recording.tabId = t.openerId;
+      broadcastMode(t.openerId, recording.mode);
+      sendUI('rec:state', { recording: true, tabId: t.openerId, mode: recording.mode });
+    } else stopRecording();
+  }
+  if (runner) runner.onTabClosed(t.view.webContents);
   tabs.delete(id);
   if (!t.view.external) win.contentView.removeChildView(t.view);
-  t.view.webContents.close();
+  if (!fromPage) { try { t.view.webContents.close(); } catch {} }
+  if (t.openerId && tabs.has(t.openerId) && activeTabId === id) activeTabId = t.openerId;
   if (activeTabId === id) {
     const rest = [...tabs.keys()];
     activeTabId = rest.length ? rest[rest.length - 1] : null;
@@ -293,6 +351,34 @@ function closeTab(id) {
   if (!tabs.size) createTab({});
   layout();
   pushTabs();
+}
+
+// A page opened a new tab/window: recordings and runs follow it.
+function onPopupOpened(openerTab, newTab) {
+  if (recording && recording.tabId === openerTab.id) {
+    recording.tabId = newTab.id;
+    sendUI('rec:state', { recording: true, tabId: newTab.id, mode: recording.mode });
+  }
+  if (runner) runner.onNewTab(openerTab.view.webContents, newTab);
+}
+
+function adoptFirefoxPopup(openerWc, wc) {
+  const opener = [...tabs.values()].find((t) => t.view.webContents === openerWc);
+  if (!opener) return;
+  const id = nextTabId++;
+  const view = { external: true, webContents: wc, setVisible() {}, setBounds() {} };
+  const tab = { id, view, engine: 'firefox', profileId: opener.profileId, title: 'Loading…', url: '', favicon: null, loading: true, openerId: opener.id };
+  tabs.set(id, tab);
+  const upd = () => { tab.url = wc.getURL() === 'about:blank' ? '' : wc.getURL(); tab.title = wc.getTitle() || tab.url || 'New tab'; pushTabs(); layout(); };
+  wc.on('page-title-updated', upd);
+  wc.on('did-stop-loading', () => { tab.loading = false; upd(); });
+  wc.on('did-navigate', (_e, u) => {
+    upd();
+    if (recording && recording.tabId === id && u !== 'about:blank') sendUI('rec:navigated', { tabId: id, url: u, ts: Date.now() });
+  });
+  wc.on('destroyed', () => { if (tabs.has(id)) closeTab(id, { fromPage: true }); });
+  activateTab(id);
+  onPopupOpened(opener, tab);
 }
 
 function normalizeUrl(input) {
@@ -440,6 +526,10 @@ handle('tabs:show-firefox', (id) => { const t = tabs.get(id ?? activeTabId); if 
 handle('runner:stop', (runId) => runner.stop(runId));
 handle('runner:resume', (runId, action) => runner.resume(runId, action));
 handle('shell:open', (url) => { if (/^https?:/.test(url)) shell.openExternal(url); });
+handle('file:pick', async ({ multiple = true } = {}) => {
+  const r = await dialog.showOpenDialog(win, { properties: ['openFile', ...(multiple ? ['multiSelections'] : [])] });
+  return r.canceled ? [] : r.filePaths;
+});
 handle('file:save', async ({ name, content, base64, defaultPath }) => {
   const r = await dialog.showSaveDialog(win, { defaultPath: defaultPath || path.join(app.getPath('downloads'), name) });
   if (r.canceled || !r.filePath) return null;
@@ -508,6 +598,13 @@ app.whenReady().then(async () => {
       // page script -> main (same channels as the Chromium preload uses)
       onSend: (wc, frame, channel, args) => ipcMain.emit(channel, { sender: wc, senderFrame: frame, returnValue: null }, ...args),
       onInvoke: (wc, channel) => (channel === 'rec:get-mode' ? recModeFor(wc) : null),
+      onPopup: (openerWc, wc) => adoptFirefoxPopup(openerWc, wc),
+      onDownload: (wc, download) => {
+        // not expected by a run: save to Downloads like the built-in browser
+        const target = uniqueDownloadPath(app.getPath('downloads'), download.suggestedFilename());
+        download.saveAs(target).then(() => sendUI('download:done', { file: target, state: 'completed' })).catch(() => {});
+        noteRecordedDownload(wc, download.suggestedFilename());
+      },
     },
   });
   if (process.env.AB_TEST) global.__abTest = { tabs, get firefox() { return firefox; } }; // end-to-end tests only
@@ -517,6 +614,11 @@ app.whenReady().then(async () => {
     emit: sendUI,
     speed: () => Number(settings.human_speed) || 1,
     privacy: () => settings.privacy_mode !== false,
+    expectDownload,
+    downloadsDir: () => app.getPath('downloads'),
+    documentsDir: () => app.getPath('documents'),
+    closeTab: (wc) => { const t = [...tabs.values()].find((x) => x.view.webContents === wc); if (t) closeTab(t.id); },
+    showTab: (wc) => { const t = [...tabs.values()].find((x) => x.view.webContents === wc); if (t) activateTab(t.id); },
     // a run needs a person: show its tab, flash the taskbar, notify
     onPause: (ctx, info) => {
       const t = [...tabs.values()].find((x) => x.view.webContents === ctx.wc);

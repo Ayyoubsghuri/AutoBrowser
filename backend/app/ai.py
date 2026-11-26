@@ -333,6 +333,14 @@ Input: the steps a user recorded by clicking around a website, in order. Each st
   current item. If the list has several pages, put the extract_table inside an until_missing loop
   first (rows accumulate), then the items loop after it. A recorded `loop` with over "items" is
   already correct: keep it.
+- File fields: an `upload` step (target = the input[type=file], value = full path(s) separated by ';' or a
+  column such as {{row.file_path}} - PDF data sources provide `file_path`). Never click a file field.
+- Downloads: a `download` step whose target is the link/button that downloads, value = file name to save
+  as, e.g. "receipt_{{row.Case ID}}.pdf" (empty keeps the site's name); the saved path goes into the
+  row's results.
+- New tabs / pop-up windows opened by the page are followed automatically, and when they close the
+  flow continues on the page that opened them. Use a `tab` step with value "close" to close a pop-up
+  that stays open (or "back" to return without closing).
 - Where a person is needed (CAPTCHA, SMS / e-mail code that is not a saved TOTP, a final check before
   submitting), add a `pause` step with `value` telling the person what to do; add
   `condition` {"captcha": true} to pause only when a CAPTCHA is actually showing. Steps that fail

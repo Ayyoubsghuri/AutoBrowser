@@ -7,6 +7,24 @@
 //   compiled - run the AI-built version of the flow (loops, login, variables).
 const { ipcMain } = require('electron');
 const { Human, sleep } = require('./human');
+const fs = require('fs');
+const path = require('path');
+
+const isGone = (wc) => !wc || (typeof wc.isDestroyed === 'function' && wc.isDestroyed());
+const safeName = (s) => String(s).replace(/[\\/:*?"<>|]+/g, '_').trim().slice(0, 80) || 'download';
+// keep the site's extension when the chosen name has none
+function nameWithExt(wanted, suggested) {
+  if (!wanted) return safeName(suggested || 'download');
+  if (path.extname(wanted) || !path.extname(suggested || '')) return safeName(wanted);
+  return safeName(wanted + path.extname(suggested));
+}
+function uniquePath(dir, name) {
+  let p = path.join(dir, name);
+  const ext = path.extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  for (let i = 1; fs.existsSync(p); i++) p = path.join(dir, `${stem} (${i})${ext}`);
+  return p;
+}
 
 let reqCounter = 0;
 const pendingReplies = new Map();
@@ -82,6 +100,31 @@ class Runner {
     this.human = new Human(deps.speed);
     this.active = new Map(); // runId -> {stopped}
     this.pauses = new Map(); // runId -> resolve(action)
+    this.ctxByWc = new Map(); // webContents (or Firefox page) -> run context using it
+  }
+
+  // A page in a running flow opened a new tab/window: continue there.
+  onNewTab(openerWc, tab) {
+    const ctx = this.ctxByWc.get(openerWc);
+    if (!ctx || ctx.state.stopped) return;
+    ctx.tabStack.push({ tab: ctx.tab, wc: ctx.wc });
+    ctx.tab = tab;
+    ctx.wc = tab.view.webContents;
+    this.ctxByWc.set(ctx.wc, ctx);
+    ctx.log('info', 'The page opened a new tab: continuing there');
+  }
+
+  // A tab used by a run closed (by the page or the user): go back to the one that opened it.
+  onTabClosed(wc) {
+    const ctx = this.ctxByWc.get(wc);
+    this.ctxByWc.delete(wc);
+    if (!ctx || ctx.wc !== wc) return;
+    const prev = ctx.tabStack.pop();
+    if (prev) {
+      ctx.tab = prev.tab;
+      ctx.wc = prev.wc;
+      ctx.log('info', 'The new tab closed: back to the previous page');
+    }
   }
 
   stop(runId) {
@@ -162,13 +205,14 @@ class Runner {
         account = await this.deps.api('GET', `/profiles/${profileId}/secrets?site=${encodeURIComponent(site)}`).catch(() => ({}));
       }
       const ctx = {
-        wc, tab, mode, state, log, flowId: flow.id, profileId, runId: run.id, onlyRows: rows,
+        wc, tab, mode, state, log, flowId: flow.id, flowName: flow.name, profileId, runId: run.id, onlyRows: rows, tabStack: [],
         vars: { ...builtinVars(), account, vars: {} },
         output: (name, data) => {
           outBuf.push({ name, data, url: wc.getURL(), profile_id: profileId, t: Date.now() });
           emit('run:output', { runId: run.id, name, data });
         },
       };
+      this.ctxByWc.set(wc, ctx);
       log('info', `Starting "${flow.name}" (${mode})${profileId ? ` as ${account.username || profileId}` : ''}`);
       const first = steps[0];
       if (flow.start_url && !(first && first.type === 'goto')) {
@@ -183,6 +227,7 @@ class Runner {
     } finally {
       clearInterval(flushTimer);
       this.active.delete(run.id);
+      for (const [k, c] of this.ctxByWc) if (c.runId === run.id) this.ctxByWc.delete(k);
       await flush({ status, finished: true });
       // remember each row's status in the data source ('skip rows already done', re-runs)
       if (datasetId) await this.deps.api('POST', `/runs/${run.id}/apply-to-data`).catch(() => {});
@@ -196,6 +241,9 @@ class Runner {
   // Data-driven run: steps before `start_step_id` run once (login…), the rest once per row.
   async runRows(ctx, flow, steps, runId) {
     const cfg = flow.data;
+    // relative upload paths are resolved next to the original data file
+    const ds = await this.deps.api('GET', `/datasets/${cfg.dataset_id}`).catch(() => null);
+    if (ds && ds.source_path) ctx.dataFolder = path.dirname(ds.source_path);
     const only = ctx.onlyRows && ctx.onlyRows.length ? `?rows=${ctx.onlyRows.join(',')}` : '';
     const { rows, total } = await this.deps.api('GET', `/flows/${flow.id}/data-rows${only}`);
     if (only) ctx.log('info', `Re-running ${rows.length} selected row(s)`);
@@ -338,9 +386,11 @@ class Runner {
 
   async settle(ctx, minMs = 250) {
     await this.human.wait(minMs, minMs * 2);
-    if (ctx.wc.isLoading()) {
+    const wc = ctx.wc; // may change if a pop-up opened or closed meanwhile
+    if (isGone(wc)) return;
+    if (wc.isLoading()) {
       await Promise.race([
-        new Promise((r) => ctx.wc.once('did-stop-loading', r)),
+        new Promise((r) => { wc.once('did-stop-loading', r); wc.once('destroyed', r); }),
         sleep(30000),
       ]);
       await this.human.wait(200, 500);
@@ -348,12 +398,13 @@ class Runner {
   }
 
   async clickBox(ctx, box) {
+    const wc = ctx.wc;
     let navStarted = false;
     const onNav = () => { navStarted = true; };
-    ctx.wc.once('did-start-navigation', onNav);
-    await this.human.click(ctx.wc, box);
+    wc.once('did-start-navigation', onNav);
+    await this.human.click(wc, box);
     await sleep(350);
-    ctx.wc.removeListener('did-start-navigation', onNav);
+    if (!isGone(wc)) wc.removeListener('did-start-navigation', onNav); // the click may have closed this tab
     await this.settle(ctx, navStarted ? 400 : 150);
   }
 
@@ -369,7 +420,8 @@ class Runner {
 
   async goto(ctx, url) {
     ctx.log('info', `Open ${url}`);
-    await ctx.wc.loadURL(url).catch((e) => { if (!String(e.message).includes('ERR_ABORTED')) throw e; });
+    // an interrupted load (redirect, the page navigating itself) is not an error: settle() waits for the result
+    await ctx.wc.loadURL(url).catch((e) => { if (!(e && (e.code === 'ERR_ABORTED' || e.errno === -3 || /ERR_ABORTED|\(-3\)/.test(String(e.message))))) throw e; });
     await this.settle(ctx, 500);
   }
 
@@ -443,6 +495,51 @@ class Runner {
         const after = await frameCall(box.frame, 'checkState', { target: step.target, scope: ctx.scope }).catch(() => null);
         if (after && after.found && after.checked !== null && after.checked !== want) throw new Error(`${name} did not change`);
         return;
+      }
+
+      case 'upload': {
+        const paths = v(step.value || '').split(/[;\n]/).map((x) => x.trim()).filter(Boolean).map((p) => this.resolvePath(ctx, p));
+        if (!paths.length) throw new Error('no file to upload (set the file path or a column)');
+        const missing = paths.filter((p) => !fs.existsSync(p));
+        if (missing.length) throw new Error(`file not found: ${missing.join(', ')}`);
+        const frame = this.frameFor(ctx, step);
+        ctx.log('info', `Upload ${paths.map((p) => path.basename(p)).join(', ')}`, step.id);
+        await this.setInputFiles(ctx, frame, step, paths);
+        return this.settle(ctx, 300);
+      }
+
+      case 'download': {
+        const box = await this.locate(ctx, step);
+        if (!box) throw new Error(`download link not found: ${step.target?.text || step.target?.selectors?.[0]?.value || ''}`);
+        const dir = this.resolveDownloadDir(ctx, step);
+        const wanted = v(step.value || '').trim().replace(/[\\/:*?"<>|]+/g, '_');
+        const pending = this.deps.expectDownload(ctx.wc, (suggested) => uniquePath(dir, nameWithExt(wanted, suggested)), 90000);
+        ctx.log('info', `Download ${wanted || '(keep the site\'s name)'}`, step.id);
+        await this.clickBox(ctx, box);
+        const saved = await pending;
+        ctx.log('info', `Saved ${saved}`, step.id);
+        const key = step.name || 'download';
+        if (ctx.itemResult) ctx.itemResult[key] = saved;
+        else if (ctx.rowResult) ctx.rowResult[key] = saved;
+        else ctx.output('downloads', { file: saved });
+        return;
+      }
+
+      case 'tab': {
+        // value: 'close' (close this tab, back to the previous page) | 'back' (switch back, keep it open)
+        const prev = ctx.tabStack[ctx.tabStack.length - 1];
+        if (!prev) { ctx.log('info', 'No previous tab to go back to', step.id); return; }
+        if ((step.value || 'close') === 'close') {
+          const wc = ctx.wc;
+          this.onTabClosed(wc);
+          if (this.deps.closeTab) this.deps.closeTab(wc);
+        } else {
+          ctx.tabStack.pop();
+          ctx.tab = prev.tab;
+          ctx.wc = prev.wc;
+        }
+        if (this.deps.showTab) this.deps.showTab(ctx.wc);
+        return this.settle(ctx, 200);
       }
 
       case 'pause':
@@ -660,6 +757,52 @@ class Runner {
     }
     ctx.log(failed ? 'warn' : 'info', `Items done: ${ok} succeeded, ${failed} failed → "${outName}"`, step.id);
     if (failed && !ok) throw new Error('Every item failed');
+  }
+
+  resolvePath(ctx, p) {
+    if (path.isAbsolute(p)) return p;
+    // relative paths: next to the data file, else the user's Documents folder
+    const base = (ctx.dataFolder && fs.existsSync(ctx.dataFolder)) ? ctx.dataFolder : this.deps.documentsDir();
+    return path.join(base, p);
+  }
+
+  resolveDownloadDir(ctx, step) {
+    const dir = step.folder ? this.resolvePath(ctx, render(step.folder, ctx.vars)) : path.join(this.deps.downloadsDir(), 'AutoBrowser', safeName(ctx.flowName || 'downloads'));
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  // Put files into an <input type=file> without opening the system file dialog.
+  async setInputFiles(ctx, frame, step, paths) {
+    const token = `f${Date.now()}${Math.random().toString(36).slice(2, 7)}`;
+    const marked = await frameCall(frame, 'markElement', { target: step.target, scope: ctx.scope, token });
+    if (!marked || !marked.found) throw new Error('file field not found');
+    if (marked.tag !== 'input' || marked.type !== 'file') throw new Error('the target is not a file field (input type=file)');
+    const selector = `[data-ab-file="${token}"]`;
+    try {
+      if (ctx.wc.setInputFiles) {
+        await ctx.wc.setInputFiles(frame, selector, paths); // Firefox (Playwright)
+      } else {
+        const dbg = ctx.wc.debugger;
+        const wasAttached = dbg.isAttached();
+        if (!wasAttached) dbg.attach('1.3');
+        try {
+          const { root } = await dbg.sendCommand('DOM.getDocument', { depth: -1, pierce: true });
+          // the marked element may be inside an iframe: search the whole tree
+          const { searchId, resultCount } = await dbg.sendCommand('DOM.performSearch', { query: selector, includeUserAgentShadowDOM: false });
+          let nodeId = 0;
+          if (resultCount) ({ nodeIds: [nodeId] } = await dbg.sendCommand('DOM.getSearchResults', { searchId, fromIndex: 0, toIndex: 1 }));
+          await dbg.sendCommand('DOM.discardSearchResults', { searchId }).catch(() => {});
+          if (!nodeId) ({ nodeId } = await dbg.sendCommand('DOM.querySelector', { nodeId: root.nodeId, selector }));
+          if (!nodeId) throw new Error('file field not found');
+          await dbg.sendCommand('DOM.setFileInputFiles', { nodeId, files: paths });
+        } finally {
+          if (!wasAttached) { try { dbg.detach(); } catch {} }
+        }
+      }
+    } finally {
+      await frameCall(frame, 'unmarkElement', { token }).catch(() => {});
+    }
   }
 
   async aiStep(ctx, step) {

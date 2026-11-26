@@ -86,13 +86,16 @@ def test_join_filter_and_flow_rows(client):
 
 def test_pdf_rules_and_private_suggestions(client, monkeypatch):
     d = upload(client, "a.pdf", make_pdf(["Application form", "Applicant: Ana Lima", "File number: 88231"]))
-    assert d["kind"] == "pdf" and d["columns"] == ["_file"]
+    assert d["kind"] == "pdf" and d["columns"] == ["_file", "file_path"]
     d = upload(client, "b.pdf", make_pdf(["Application form", "Applicant: Bo Chen", "File number: 99412"]), dataset_id=d["id"])
     assert d["row_count"] == 2
     d = client.patch(f"/datasets/{d['id']}", json={"rules": [
         {"name": "applicant", "kind": "after_label", "pattern": "Applicant"},
         {"name": "file_no", "kind": "regex", "pattern": r"File number:\s*(\d+)"}]}).json()
-    assert d["rows"][0] == {"_file": "a.pdf", "applicant": "Ana Lima", "file_no": "88231"}
+    row = d["rows"][0]
+    assert {k: row[k] for k in ("_file", "applicant", "file_no")} == {"_file": "a.pdf", "applicant": "Ana Lima", "file_no": "88231"}
+    from pathlib import Path
+    assert Path(row["file_path"]).is_file() and Path(row["file_path"]).read_bytes().startswith(b"%PDF")  # kept for uploads
 
     client.put("/settings", json={"anthropic_api_key": "sk-test"})  # private mode is on by default
     seen = {}

@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Demo Office – Attach documents</title>
+<style>body{font-family:system-ui;padding:30px;background:#f6f7fb}form{background:#fff;padding:20px;border-radius:12px;width:420px;display:flex;flex-direction:column;gap:10px}.pick{display:inline-block;padding:8px 14px;border-radius:8px;background:#e0e7ff;cursor:pointer}#doc{display:none}button{padding:8px;border-radius:8px;border:0;background:#0f766e;color:#fff}</style></head>
+<body><h1>Attach your document</h1>
+<form id="f">
+  <label class="pick" for="doc">Choose PDF…</label>
+  <input type="file" id="doc" name="doc" accept=".pdf,.txt" multiple>
+  <div id="chosen">No file</div>
+  <button type="submit" id="send">Send</button>
+</form>
+<div id="result"></div>
+<script>
+const doc = document.getElementById('doc');
+doc.addEventListener('change', () => {
+  document.getElementById('chosen').textContent = Array.from(doc.files).map((f) => `${f.name} (${f.size} bytes)`).join(', ');
+});
+document.getElementById('f').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = doc.files[0];
+  const head = f ? (await f.slice(0, 5).text()) : '';
+  document.getElementById('result').textContent = f ? `Received ${f.name}, ${f.size} bytes, starts with ${head}` : 'Nothing attached';
+});
+</script></body></html>

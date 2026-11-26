@@ -112,6 +112,16 @@ export default function Shell() {
         if (tpl) { s.sample = s.value; s.value = tpl; }
         setSteps((cur) => [...cur, s]);
       }),
+      b.on('rec:download', ({ filename }) => {
+        setSteps((cur) => {
+          const i = cur.map((s) => s.type).lastIndexOf('click');
+          if (i < 0) return cur;
+          const n = cur.slice();
+          n[i] = { ...n[i], type: 'download', value: filename, in_list: undefined };
+          return n;
+        });
+        toast(`Recorded a download (${filename})`);
+      }),
       b.on('rec:navigated', ({ url, ts }) => {
         setSteps((cur) => (shouldAddGoto(cur, url, ts) ? [...cur, { id: uid(), type: 'goto', url, ts }] : cur));
       }),

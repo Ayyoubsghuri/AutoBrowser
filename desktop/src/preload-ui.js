@@ -2,7 +2,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const EVENTS = new Set([
-  'tabs:update', 'tabs:error', 'rec:step', 'rec:state', 'rec:navigated',
+  'tabs:update', 'tabs:error', 'rec:step', 'rec:state', 'rec:navigated', 'rec:download',
   'run:log', 'run:status', 'run:output', 'run:progress', 'run:paused', 'run:resumed', 'engine:progress', 'download:done', 'ui:focus-address', 'ui:new-tab',
 ]);
 
@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('autobrowser', {
   // full path of a file picked in an <input type=file> (to save results next to the original)
   pathForFile: (file) => { try { return webUtils.getPathForFile(file) || null; } catch { return null; } },
   saveFile: inv('file:save'),
+  pickFiles: inv('file:pick'),
   on(channel, cb) {
     if (!EVENTS.has(channel)) throw new Error(`unknown channel ${channel}`);
     const fn = (_e, payload) => cb(payload);

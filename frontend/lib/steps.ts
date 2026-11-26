@@ -20,6 +20,9 @@ export function stepTitle(s: Step): string {
     case 'loop': return s.loop?.over === 'items' ? `For each item${s.loop.from ? ` in “${s.loop.from}”` : ' in the list'}` : `Repeat (${s.loop?.over || 'count'})`;
     case 'if': return 'If…';
     case 'ai': return `AI: ${s.instruction || s.tip || ''}`;
+    case 'upload': return `Upload ${s.value ? `“${s.value.length > 40 ? `${s.value.slice(0, 40)}…` : s.value}”` : 'a file'}`;
+    case 'download': return `Download${s.value ? ` as “${s.value}”` : ''}`;
+    case 'tab': return s.value === 'back' ? 'Back to the previous tab' : 'Close this tab, back to the previous one';
     case 'pause': return `Pause for you${s.condition && (s.condition as any).captcha ? ' (only if CAPTCHA)' : ''}`;
     default: return s.type;
   }

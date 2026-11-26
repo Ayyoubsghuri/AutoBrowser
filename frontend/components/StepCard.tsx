@@ -1,6 +1,6 @@
 'use client';
 import {
-  ArrowDown, ArrowUp, Bot, Clock, Globe, Keyboard, KeyRound, List, MousePointerClick, Repeat, ScrollText, Table2, Trash2, Type, GitBranch, ChevronDown, ScanText, CheckSquare, Repeat1, Hand,
+  ArrowDown, ArrowUp, Bot, Clock, Globe, Keyboard, KeyRound, List, MousePointerClick, Repeat, ScrollText, Table2, Trash2, Type, GitBranch, ChevronDown, ScanText, CheckSquare, Repeat1, Hand, Upload, Download, FolderOpen,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { bridge } from '@/lib/bridge';
@@ -9,7 +9,7 @@ import { bestSelector, stepTitle } from '@/lib/steps';
 
 const ICONS: Record<string, React.ComponentType<{ size?: number }>> = {
   goto: Globe, click: MousePointerClick, type: Type, select: ChevronDown, press: Keyboard, scroll: ScrollText,
-  check: CheckSquare, pause: Hand, wait: Clock, extract_table: Table2, extract_text: ScanText, login: KeyRound, loop: Repeat, if: GitBranch, ai: Bot,
+  check: CheckSquare, pause: Hand, tab: Globe, upload: Upload, download: Download, wait: Clock, extract_table: Table2, extract_text: ScanText, login: KeyRound, loop: Repeat, if: GitBranch, ai: Bot,
 };
 
 const FORMATS: { label: string; filter: string }[] = [
@@ -137,6 +137,30 @@ export function StepCard({ step, index, onChange, onRemove, onMove, readOnly = f
       )}
       {!readOnly && step.type === 'wait' && !step.target && (
         <input className="input small" type="number" min={100} step={100} value={step.ms ?? 1000} onChange={(e) => set({ ms: Number(e.target.value) })} />
+      )}
+      {!readOnly && step.type === 'upload' && (
+        <>
+          <div className="row" style={{ gap: 6 }}>
+            <input className="input small grow mono" value={step.value ?? ''} onChange={(e) => set({ value: e.target.value })}
+              placeholder="C:\\Docs\\file.pdf or {{row.file_path}} (several: separate with ;)" />
+            <button className="btn sm" title="Choose files" onClick={async () => { const f = await bridge().pickFiles({ multiple: true }); if (f.length) set({ value: f.join('; ') }); }}><FolderOpen size={13} /></button>
+            <ColumnPicker columns={columns} onPick={(tpl) => set({ value: tpl })} />
+          </div>
+          {!/[\\/]/.test(step.value || '') && !/\{\{/.test(step.value || '') && step.value && (
+            <div className="small" style={{ color: 'var(--warn)' }}>Only the file name was recorded: choose the file (📂), give a full path, or use a column.</div>
+          )}
+        </>
+      )}
+      {!readOnly && step.type === 'download' && (
+        <>
+          <div className="row" style={{ gap: 6 }}>
+            <input className="input small grow mono" value={step.value ?? ''} onChange={(e) => set({ value: e.target.value })}
+              placeholder="Save as, e.g. receipt_{{row.Case ID}}.pdf (empty = site's name)" />
+            <ColumnPicker columns={columns} onPick={(tpl) => set({ value: `${(step.value || '').replace(/\.[^.]*$/, '')}_${tpl}` })} />
+          </div>
+          <input className="input small mono" value={step.folder ?? ''} onChange={(e) => set({ folder: e.target.value || undefined })}
+            placeholder="Folder (default: Downloads\\AutoBrowser\\<flow name>)" />
+        </>
       )}
       {!readOnly && step.type === 'pause' && (
         <>

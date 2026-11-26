@@ -87,6 +87,16 @@ def upload(body: DatasetUpload):
             meta["rules"] = datasets.default_pdf_rules(meta["files"])
         columns, rows = datasets.pdf_table(meta["files"], meta["rules"])
         did = existing["id"] if existing else db.new_id()
+        # keep the PDFs themselves too (for upload steps: {{row.file_path}})
+        folder = FILES / did
+        folder.mkdir(parents=True, exist_ok=True)
+        for f in pdfs:
+            target = folder / Path(f.filename).name
+            target.write_bytes(_decode(f.content_b64))
+            for x in meta["files"]:
+                if x["name"] == f.filename:
+                    x["path"] = str(target)
+        columns, rows = datasets.pdf_table(meta["files"], meta["rules"])
         name = existing["name"] if existing else (body.name or f"{len(pdfs)} PDF{'s' if len(pdfs) > 1 else ''}")
         return _public(_save(did, name, "pdf", columns, rows, meta, new=not existing))
 

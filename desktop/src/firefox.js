@@ -99,6 +99,12 @@ class PageAdapter extends EventEmitter {
       page.title().then((t) => { this.title = t; this.emit('page-title-updated'); }).catch(() => {});
     });
     page.on('close', () => { this.closed = true; this.emit('destroyed'); });
+    page.on('popup', (p) => { if (engine.hooks.onPopup) engine.hooks.onPopup(this, engine.pageAdapter(p)); });
+    page.on('download', (d) => {
+      const want = this.pendingDownload;
+      if (want) { this.pendingDownload = null; want(d); return; }
+      if (engine.hooks.onDownload) engine.hooks.onDownload(this, d);
+    });
     const self = this;
     this.navigationHistory = {
       canGoBack: () => true,
@@ -122,6 +128,22 @@ class PageAdapter extends EventEmitter {
   close() { return this.page.close().catch(() => {}); }
   focus() { return this.page.bringToFront().catch(() => {}); }
   toggleDevTools() {}
+  /** Next download from this page is saved at pathFor(suggestedName). */
+  expectDownload(pathFor, timeout = 90000) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.pendingDownload = null; reject(new Error('no download started')); }, timeout);
+      this.pendingDownload = (d) => {
+        clearTimeout(timer);
+        const target = pathFor(d.suggestedFilename());
+        d.saveAs(target).then(() => resolve(target), reject);
+      };
+    });
+  }
+
+  setInputFiles(frameAdapter, selector, paths) {
+    return frameAdapter.frame.setInputFiles(selector, paths);
+  }
+
   /** Resolves when all queued mouse / keyboard events have been delivered. */
   flushInput() { return this.chain; }
 
