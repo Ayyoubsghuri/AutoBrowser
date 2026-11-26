@@ -250,3 +250,7 @@ button { cursor: pointer; }
 @media (max-width: 1100px) {
   .panel { width: 340px; }
 }
+
+.pausebar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 16px; flex: none;
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent); }
+.pagewrap > .pausebar ~ .pageframe, .pagewrap > .pausebar ~ .start { position: relative; inset: auto; flex: 1; min-height: 0; }

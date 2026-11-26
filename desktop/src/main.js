@@ -3,7 +3,7 @@
 // Window layout: one WebContentsView renders the Next.js UI (glass chrome,
 // panels) across the whole window; the active tab's WebContentsView floats on
 // top inside the rectangle the UI reports via `ui:page-bounds`.
-const { app, BaseWindow, WebContentsView, ipcMain, session, protocol, net, shell, Menu, dialog } = require('electron');
+const { app, BaseWindow, WebContentsView, ipcMain, session, protocol, net, shell, Menu, dialog, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
@@ -438,6 +438,7 @@ handle('engine:install-firefox', async () => {
 });
 handle('tabs:show-firefox', (id) => { const t = tabs.get(id ?? activeTabId); if (t && t.view.external) t.view.webContents.focus(); });
 handle('runner:stop', (runId) => runner.stop(runId));
+handle('runner:resume', (runId, action) => runner.resume(runId, action));
 handle('shell:open', (url) => { if (/^https?:/.test(url)) shell.openExternal(url); });
 handle('file:save', async ({ name, content, base64 }) => {
   const r = await dialog.showSaveDialog(win, { defaultPath: path.join(app.getPath('downloads'), name) });
@@ -516,6 +517,19 @@ app.whenReady().then(async () => {
     emit: sendUI,
     speed: () => Number(settings.human_speed) || 1,
     privacy: () => settings.privacy_mode !== false,
+    // a run needs a person: show its tab, flash the taskbar, notify
+    onPause: (ctx, info) => {
+      const t = [...tabs.values()].find((x) => x.view.webContents === ctx.wc);
+      if (t) activateTab(t.id);
+      if (win) { win.flashFrame(true); setTimeout(() => win && win.flashFrame(false), 15000); }
+      try {
+        if (Notification.isSupported()) {
+          const n = new Notification({ title: 'AutoBrowser needs you', body: info.message, silent: false });
+          n.on('click', () => { if (win) win.focus(); });
+          n.show();
+        }
+      } catch {}
+    },
   });
   await createWindow();
 });

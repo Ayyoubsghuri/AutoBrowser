@@ -28,6 +28,7 @@ function frameCall(frame, cmd, args = {}, timeout = 15000) {
 }
 
 class StopError extends Error {}
+class SkipError extends Error {} // "Skip this row/item" chosen while paused
 
 const { render, lookup } = require('./template');
 
@@ -80,10 +81,41 @@ class Runner {
     this.deps = deps;
     this.human = new Human(deps.speed);
     this.active = new Map(); // runId -> {stopped}
+    this.pauses = new Map(); // runId -> resolve(action)
   }
 
   stop(runId) {
     for (const [id, st] of this.active) if (!runId || id === runId) st.stopped = true;
+    for (const [id, resolve] of this.pauses) if (!runId || id === runId) resolve('stop');
+  }
+
+  /** Answer a paused run: 'continue' | 'skip' (this row/item) | 'stop'. */
+  resume(runId, action = 'continue') {
+    const r = this.pauses.get(runId);
+    if (r) r(action);
+    return !!r;
+  }
+
+  // Human in the loop: show what is needed, wait for Continue / Skip / Stop.
+  async waitForHuman(ctx, message, stepId) {
+    const info = { runId: ctx.runId, flowId: ctx.flowId, profileId: ctx.profileId, message, stepId, row: ctx.vars.row ? ctx.vars.row._row ?? null : null };
+    ctx.log('warn', `Paused: ${message}`, stepId);
+    this.deps.emit('run:paused', info);
+    if (this.deps.onPause) this.deps.onPause(ctx, info);
+    const action = await new Promise((resolve) => this.pauses.set(ctx.runId, resolve));
+    this.pauses.delete(ctx.runId);
+    this.deps.emit('run:resumed', { runId: ctx.runId, action });
+    ctx.log('info', action === 'continue' ? 'Continuing' : action === 'skip' ? 'Skipped by you' : 'Stopped by you', stepId);
+    if (action === 'stop') throw new StopError('Stopped by user');
+    if (action === 'skip') throw new SkipError('Skipped by you');
+  }
+
+  async captchaOnPage(ctx) {
+    for (const f of ctx.wc.mainFrame.framesInSubtree) {
+      const r = await frameCall(f, 'detectCaptcha', {}, 3000).catch(() => null);
+      if (r && r.found) return r.kind;
+    }
+    return null;
   }
 
   async runMany({ flow, profileIds, mode = 'exact', parallel = false }) {
@@ -129,7 +161,7 @@ class Runner {
         account = await this.deps.api('GET', `/profiles/${profileId}/secrets?site=${encodeURIComponent(site)}`).catch(() => ({}));
       }
       const ctx = {
-        wc, tab, mode, state, log, flowId: flow.id, profileId,
+        wc, tab, mode, state, log, flowId: flow.id, profileId, runId: run.id,
         vars: { ...builtinVars(), account, vars: {} },
         output: (name, data) => {
           outBuf.push({ name, data, url: wc.getURL(), profile_id: profileId, t: Date.now() });
@@ -145,8 +177,8 @@ class Runner {
       else await this.execSteps(ctx, steps);
       log('info', 'Finished ✓');
     } catch (e) {
-      status = e instanceof StopError ? 'stopped' : 'failed';
-      log('error', e.message || String(e));
+      status = e instanceof StopError || e instanceof SkipError ? 'stopped' : 'failed';
+      log(status === 'stopped' ? 'warn' : 'error', e.message || String(e));
     } finally {
       clearInterval(flushTimer);
       this.active.delete(run.id);
@@ -187,7 +219,7 @@ class Runner {
         await this.execSteps(ctx, each);
         ok++;
       } catch (e) {
-        status = e instanceof StopError ? 'stopped' : 'failed';
+        status = e instanceof StopError ? 'stopped' : e instanceof SkipError ? 'skipped' : 'failed';
         message = e.message || String(e);
         if (status === 'failed') { failed++; ctx.log('error', `Row ${num} failed: ${message}`); }
         if (e instanceof StopError || cfg.stop_on_error) {
@@ -210,9 +242,18 @@ class Runner {
     for (const step of steps) {
       this.checkStop(ctx);
       try {
-        await this.exec(ctx, step);
+        try {
+          await this.exec(ctx, step);
+        } catch (e) {
+          if (e instanceof StopError || e instanceof SkipError || step.type === 'pause') throw e;
+          // A step failed and a CAPTCHA is showing: let the person solve it, then retry once.
+          const kind = await this.captchaOnPage(ctx);
+          if (!kind) throw e;
+          await this.waitForHuman(ctx, `A CAPTCHA (${kind}) is on the page. Solve it in the browser, then press Continue.`, step.id);
+          await this.exec(ctx, step);
+        }
       } catch (e) {
-        if (e instanceof StopError) throw e;
+        if (e instanceof StopError || e instanceof SkipError) throw e;
         if (step.optional) { ctx.log('warn', `Skipped optional step: ${e.message}`, step.id); continue; }
         throw new Error(`Step ${step.id} (${step.type}) failed: ${e.message}`);
       }
@@ -330,6 +371,7 @@ class Runner {
   async conditionTrue(ctx, cond) {
     if (!cond) return true;
     if (cond.row) return rowCondition(ctx.vars.row, cond);
+    if (cond.captcha) return !!(await this.captchaOnPage(ctx));
     const frame = ctx.wc.mainFrame;
     if (cond.exists) {
       const has = await frameCall(frame, 'exists', typeof cond.exists === 'string' ? { selector: render(cond.exists, ctx.vars) } : { target: cond.exists, scope: ctx.scope });
@@ -397,6 +439,9 @@ class Runner {
         if (after && after.found && after.checked !== null && after.checked !== want) throw new Error(`${name} did not change`);
         return;
       }
+
+      case 'pause':
+        return this.waitForHuman(ctx, v(step.value || step.instruction || 'Check the page, then press Continue.'), step.id);
 
       case 'press':
         ctx.log('info', `Press ${step.key}`, step.id);
@@ -595,7 +640,7 @@ class Runner {
         await this.execSteps(ctx, children);
         ok++;
       } catch (e) {
-        status = e instanceof StopError ? 'stopped' : 'failed';
+        status = e instanceof StopError ? 'stopped' : e instanceof SkipError ? 'skipped' : 'failed';
         message = e.message || String(e);
         if (status === 'failed') { failed++; ctx.log('warn', `Item ${i + 1} failed: ${message}`, step.id); }
         if (e instanceof StopError) {

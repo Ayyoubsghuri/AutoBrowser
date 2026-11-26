@@ -2,11 +2,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, ArrowRight, Bot, Circle, Cog, History, Home, Lock, Plus, RotateCw, Square, UserRound, Workflow, X, Loader2, Search,
-  FileSpreadsheet,
+  FileSpreadsheet, Hand,
 } from 'lucide-react';
 import { bridge } from '@/lib/bridge';
 import { get } from '@/lib/api';
-import type { Dataset, Flow, Profile, RunLog, RunProgress, Settings, Step, TabInfo } from '@/lib/types';
+import type { Dataset, Flow, Profile, RunLog, RunPause, RunProgress, Settings, Step, TabInfo } from '@/lib/types';
 import { matchColumn, shouldAddGoto, uid } from '@/lib/steps';
 import { StartPage } from './StartPage';
 import { RecorderPanel } from './RecorderPanel';
@@ -54,6 +54,7 @@ export default function Shell() {
   const [logs, setLogs] = useState<RunLog[]>([]);
   const [running, setRunning] = useState<Record<string, string>>({});
   const [progress, setProgress] = useState<Record<string, RunProgress>>({});
+  const [pauses, setPauses] = useState<RunPause[]>([]);
   const [recData, setRecData] = useState<RecData>(null);
   const recRowRef = useRef<Record<string, unknown> | null>(null);
   recRowRef.current = recData ? recData.dataset.rows[recData.rowIndex] || null : null;
@@ -116,8 +117,11 @@ export default function Shell() {
       }),
       b.on('run:log', (l: RunLog) => setLogs((cur) => [...cur.slice(-800), l])),
       b.on('run:progress', (p: RunProgress) => setProgress((cur) => ({ ...cur, [p.runId]: p }))),
+      b.on('run:paused', (p: RunPause) => setPauses((cur) => [...cur.filter((x) => x.runId !== p.runId), p])),
+      b.on('run:resumed', ({ runId }) => setPauses((cur) => cur.filter((x) => x.runId !== runId))),
       b.on('run:status', ({ runId, status }) => {
         setRunning((cur) => ({ ...cur, [runId]: status }));
+        if (status !== 'running') setPauses((cur) => cur.filter((x) => x.runId !== runId));
         if (status === 'success') toast('Run finished ✓');
         if (status === 'failed') toast('Run failed — see Runs', true);
       }),
@@ -248,7 +252,19 @@ export default function Shell() {
         </nav>
 
         {/* ---------------------------------------------- page */}
-        <main className="pagewrap">
+        <main className="pagewrap" style={pauses.length ? { display: 'flex', flexDirection: 'column', gap: 8 } : undefined}>
+          {pauses.map((p) => (
+            <div key={p.runId} className="pausebar glass" role="alert">
+              <Hand size={18} color="var(--warn)" style={{ flex: 'none' }} />
+              <div className="grow">
+                <b>Paused{p.row ? ` · row ${p.row}` : ''}</b> — {p.message}
+                <div className="small muted">{flows.find((f) => f.id === p.flowId)?.name || 'Run'}{p.profileId ? ` · ${profileOf(p.profileId)?.name || ''}` : ''}</div>
+              </div>
+              <button className="btn primary sm" onClick={() => b.runner.resume(p.runId, 'continue')}>Continue</button>
+              {p.row != null && <button className="btn sm" onClick={() => b.runner.resume(p.runId, 'skip')}>Skip this row</button>}
+              <button className="btn sm danger" onClick={() => b.runner.resume(p.runId, 'stop')}>Stop</button>
+            </div>
+          ))}
           {inFirefox ? (
             <div className="start">
               <div className="card" style={{ maxWidth: 460, textAlign: 'center', alignItems: 'center' }}>

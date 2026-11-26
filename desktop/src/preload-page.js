@@ -675,6 +675,19 @@ const commands = {
     const val = el.isContentEditable ? el.innerText : el.value;
     return { found: true, hasValue: !!val };
   },
+  detectCaptcha() {
+    const probes = [
+      ['reCAPTCHA', 'iframe[src*="recaptcha"], .g-recaptcha'],
+      ['hCaptcha', 'iframe[src*="hcaptcha"], .h-captcha'],
+      ['Cloudflare', 'iframe[src*="challenges.cloudflare.com"], .cf-turnstile, #challenge-form'],
+      ['captcha', '[id*="captcha" i], [class*="captcha" i], img[src*="captcha" i], input[name*="captcha" i]'],
+    ];
+    for (const [kind, sel] of probes) {
+      try { if (Array.from(document.querySelectorAll(sel)).some(isVisible)) return { found: true, kind }; } catch {}
+    }
+    if (/^(just a moment|attention required|verify you are human)/i.test(document.title)) return { found: true, kind: 'Cloudflare' };
+    return { found: false };
+  },
   checkState({ target, scope }) {
     const el = findElement(target, scope);
     if (!el) return { found: false };

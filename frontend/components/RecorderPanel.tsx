@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { ChevronLeft, ChevronRight, Copy, FileSpreadsheet } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Copy, FileSpreadsheet, Hand } from 'lucide-react';
 import { Bot, Clock, Eraser, KeyRound, MousePointerClick, Sparkles, Table2, X, ScanText, Timer, Save, Circle } from 'lucide-react';
 import { bridge } from '@/lib/bridge';
 import { patch, post } from '@/lib/api';
@@ -115,6 +115,10 @@ export function RecorderPanel({ ctx, rec, steps, setSteps, editingFlow, setEditi
               <button className="tool" onClick={() => add({ type: 'wait', ms: 2000 })}><Timer size={18} />Pause 2s</button>
               <button className="tool" onClick={() => add({ type: 'ai', instruction: '' })}><Bot size={18} />AI step</button>
             </div>
+            <button className="btn sm" onClick={() => add({ type: 'pause', value: 'Solve the CAPTCHA or enter the code, then press Continue' })}
+              title="The run waits here until you press Continue (CAPTCHA, SMS code, final check)">
+              <Hand size={14} /> Add “pause for me” step
+            </button>
             <button className="btn sm" onClick={() => add({ type: 'login' })} title="Fills username / password / 2FA from the account the flow runs as">
               <KeyRound size={14} /> Add “log in with saved account” step
             </button>

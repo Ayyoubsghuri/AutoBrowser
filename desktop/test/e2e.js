@@ -409,6 +409,40 @@ function screen(name) {
     if (jres.status !== 'success') console.log(jrun.log.map((l) => `    ${l.level}: ${l.msg}`).join('\n'));
     const jd = jrun.output.filter((o) => o.name === 'items_details').flatMap((o) => o.data);
     check(jres.status === 'success' && jd.map((d) => d.price).join() === '$12.50,$25.00,$37.50,$50.00' && jd[3].col_1 === 'Monitor Arm', `clicked through all 4 JS-only items (${jd.length})`);
+
+    // ---------------------------------------------------- pause for me (CAPTCHA, human in the loop)
+    const css = (sel) => ({ selectors: [{ kind: 'css', value: sel }] });
+    const runWithHuman = async (name, steps, solve) => {
+      const fl = await call('POST', '/flows', { name, start_url: `${base}/captcha.html`, steps });
+      const runP = ui.evaluate((flow) => window.autobrowser.runner.run({ flow, profileIds: [null], mode: 'exact' }), fl);
+      await ui.waitForSelector('.pausebar', { timeout: 30000 });
+      const msg = await ui.textContent('.pausebar');
+      screen(`14-paused-${name.replace(/\W+/g, '-')}`);
+      await solve();
+      await ui.click('.pausebar button:has-text("Continue")');
+      const [res] = await runP;
+      return { res, msg, run: await call('GET', `/runs/${res.runId}`) };
+    };
+    const solveCaptcha = async () => { const pg = await tabPage(/captcha\.html/); await pg.click('#robot'); };
+    const tail = [
+      { id: 'n', type: 'type', value: 'Zed', target: css('#name') },
+      { id: 's', type: 'click', target: css('#send') },
+      { id: 'd', type: 'extract_text', name: 'done', target: css('#done:not(:empty)') },
+    ];
+    let h = await runWithHuman('Pause step', [
+      { id: 'g', type: 'goto', url: `${base}/captcha.html` },
+      { id: 'p', type: 'pause', value: 'Tick the CAPTCHA, then press Continue', condition: { captcha: true } },
+      ...tail,
+    ], solveCaptcha);
+    check(/Tick the CAPTCHA/.test(h.msg), 'pause step shows its message in the pause bar');
+    check(h.res.status === 'success' && h.run.output.some((o) => o.data === 'Sent: Zed'), 'run continued after the person solved it and pressed Continue');
+    h = await runWithHuman('Auto pause', [{ id: 'g', type: 'goto', url: `${base}/captcha.html` }, ...tail], solveCaptcha);
+    check(/CAPTCHA \(reCAPTCHA\)/.test(h.msg), 'a failing step with a CAPTCHA on the page paused automatically');
+    check(h.res.status === 'success' && h.run.output.some((o) => o.data === 'Sent: Zed'), 'the failed step was retried after Continue and the run succeeded');
+    // a pause step whose condition is false does not stop the run
+    const nf = await call('POST', '/flows', { name: 'No captcha', steps: [{ id: 'g', type: 'goto', url: `${base}/apply.html` }, { id: 'p', type: 'pause', value: 'x', condition: { captcha: true } }] });
+    const [nres] = await ui.evaluate((flow) => window.autobrowser.runner.run({ flow, profileIds: [null], mode: 'exact' }), nf);
+    check(nres.status === 'success' && !(await ui.$('.pausebar')), '"only when a CAPTCHA is on the page" skips the pause when there is none');
     await ui.click('.railbtn[data-tip="Accounts & logins"]');
     await sleep(400);
     screen('08-accounts');

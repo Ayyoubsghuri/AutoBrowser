@@ -20,6 +20,7 @@ export function stepTitle(s: Step): string {
     case 'loop': return s.loop?.over === 'items' ? `For each item${s.loop.from ? ` in “${s.loop.from}”` : ' in the list'}` : `Repeat (${s.loop?.over || 'count'})`;
     case 'if': return 'If…';
     case 'ai': return `AI: ${s.instruction || s.tip || ''}`;
+    case 'pause': return `Pause for you${s.condition && (s.condition as any).captcha ? ' (only if CAPTCHA)' : ''}`;
     default: return s.type;
   }
 }

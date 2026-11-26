@@ -27,6 +27,7 @@ export interface Bridge {
   runner: {
     run(o: { flow: unknown; profileIds: (string | null)[]; mode: RunMode; parallel?: boolean }): Promise<{ runId: string; status: string }[]>;
     stop(runId?: string): Promise<void>;
+    resume(runId: string, action: 'continue' | 'skip' | 'stop'): Promise<boolean>;
   };
   openExternal(url: string): Promise<void>;
   saveFile(o: { name: string; content: string; base64?: boolean }): Promise<string | null>;
@@ -72,7 +73,7 @@ function mockBridge(): Bridge {
       stop: async () => fire('rec:state', { recording: false }),
       setMode: async (mode) => fire('rec:state', { recording: true, mode }),
     },
-    runner: { run: async () => [], stop: noop },
+    runner: { run: async () => [], stop: noop, resume: async () => false },
     openExternal: async (u) => { window.open(u, '_blank'); },
     saveFile: async ({ name, content, base64 }) => {
       const a = document.createElement('a');

@@ -14,7 +14,7 @@ export type Target = {
 
 export type StepType =
   | 'goto' | 'click' | 'type' | 'select' | 'check' | 'press' | 'scroll' | 'wait'
-  | 'extract_table' | 'extract_text' | 'login' | 'loop' | 'if' | 'ai';
+  | 'extract_table' | 'extract_text' | 'login' | 'loop' | 'if' | 'ai' | 'pause';
 
 export type Step = {
   id: string;
@@ -143,5 +143,7 @@ export type FlowData = {
   first_row?: number;
   max_rows?: number | null;
 };
+
+export type RunPause = { runId: string; flowId: string; profileId: string | null; message: string; stepId?: string; row?: number | null };
 
 export type RunProgress = { runId: string; flowId: string; done: number; total: number; ok: number; failed: number };

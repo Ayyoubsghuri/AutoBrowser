@@ -1,6 +1,6 @@
 'use client';
 import {
-  ArrowDown, ArrowUp, Bot, Clock, Globe, Keyboard, KeyRound, List, MousePointerClick, Repeat, ScrollText, Table2, Trash2, Type, GitBranch, ChevronDown, ScanText, CheckSquare, Repeat1,
+  ArrowDown, ArrowUp, Bot, Clock, Globe, Keyboard, KeyRound, List, MousePointerClick, Repeat, ScrollText, Table2, Trash2, Type, GitBranch, ChevronDown, ScanText, CheckSquare, Repeat1, Hand,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { bridge } from '@/lib/bridge';
@@ -9,7 +9,7 @@ import { bestSelector, stepTitle } from '@/lib/steps';
 
 const ICONS: Record<string, React.ComponentType<{ size?: number }>> = {
   goto: Globe, click: MousePointerClick, type: Type, select: ChevronDown, press: Keyboard, scroll: ScrollText,
-  check: CheckSquare, wait: Clock, extract_table: Table2, extract_text: ScanText, login: KeyRound, loop: Repeat, if: GitBranch, ai: Bot,
+  check: CheckSquare, pause: Hand, wait: Clock, extract_table: Table2, extract_text: ScanText, login: KeyRound, loop: Repeat, if: GitBranch, ai: Bot,
 };
 
 const FORMATS: { label: string; filter: string }[] = [
@@ -137,6 +137,17 @@ export function StepCard({ step, index, onChange, onRemove, onMove, readOnly = f
       )}
       {!readOnly && step.type === 'wait' && !step.target && (
         <input className="input small" type="number" min={100} step={100} value={step.ms ?? 1000} onChange={(e) => set({ ms: Number(e.target.value) })} />
+      )}
+      {!readOnly && step.type === 'pause' && (
+        <>
+          <input className="input small" value={step.value ?? ''} onChange={(e) => set({ value: e.target.value })}
+            placeholder="What should you do? e.g. Enter the SMS code, then press Continue" />
+          <label className="small row" style={{ gap: 6 }}>
+            <input type="checkbox" checked={!!(step.condition && (step.condition as any).captcha)}
+              onChange={(e) => set({ condition: e.target.checked ? { captcha: true } : undefined })} />
+            Only when a CAPTCHA is on the page
+          </label>
+        </>
       )}
       {!readOnly && step.type === 'ai' && (
         <textarea className="textarea small" rows={2} value={step.instruction ?? ''} onChange={(e) => set({ instruction: e.target.value })}

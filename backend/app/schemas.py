@@ -26,6 +26,7 @@ StepType = Literal[
     "loop",          # repeat child steps: over table rows, or until a selector disappears (pagination)
     "if",            # run child steps when a selector exists / text matches
     "ai",            # resolve at run time with the AI agent (needs API key)
+    "pause",         # wait for a person (CAPTCHA, SMS code, final check); value = message
 ]
 
 

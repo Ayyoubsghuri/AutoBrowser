@@ -333,6 +333,10 @@ Input: the steps a user recorded by clicking around a website, in order. Each st
   current item. If the list has several pages, put the extract_table inside an until_missing loop
   first (rows accumulate), then the items loop after it. A recorded `loop` with over "items" is
   already correct: keep it.
+- Where a person is needed (CAPTCHA, SMS / e-mail code that is not a saved TOTP, a final check before
+  submitting), add a `pause` step with `value` telling the person what to do; add
+  `condition` {"captcha": true} to pause only when a CAPTCHA is actually showing. Steps that fail
+  while a CAPTCHA is visible pause automatically and are retried.
 - Recognise login sequences (username + password + submit) and replace them with ONE `login` step
   whose target selectors map: {"username": [...], "password": [...], "submit": [...], "totp": [...]} in `value` as JSON,
   plus `condition` {"exists": <username field css>} so it is skipped when the session is already logged in.
