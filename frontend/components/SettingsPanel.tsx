@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Bot, Check, Gauge, ShieldCheck, X } from 'lucide-react';
+import { Bot, Check, Download, Gauge, Globe, Loader2, Lock, ShieldCheck, X } from 'lucide-react';
 import { bridge } from '@/lib/bridge';
 import { put } from '@/lib/api';
 import type { AppCtx } from './Shell';
@@ -47,6 +47,17 @@ export function SettingsPanel({ ctx, onClose }: { ctx: AppCtx; onClose: () => vo
   useEffect(() => { setModel(currentModel); setKey(''); }, [provider, currentModel]);
   useEffect(() => { setBaseUrl(s?.providers?.openai?.base_url || ''); }, [s?.providers?.openai?.base_url]);
   const [info, setInfo] = useState<{ chrome: string; version: string } | null>(null);
+  const [ff, setFf] = useState<{ installed: boolean; busy: boolean; line: string }>({ installed: false, busy: false, line: '' });
+  useEffect(() => {
+    const b = bridge();
+    b.engine.status().then((st) => setFf((c) => ({ ...c, installed: st.firefoxInstalled }))).catch(() => {});
+    return b.on('engine:progress', ({ line }) => setFf((c) => ({ ...c, line })));
+  }, []);
+  const installFirefox = async () => {
+    setFf((c) => ({ ...c, busy: true, line: 'Starting download…' }));
+    try { await bridge().engine.installFirefox(); setFf({ installed: true, busy: false, line: '' }); ctx.toast('Firefox engine installed'); }
+    catch (e: any) { setFf((c) => ({ ...c, busy: false })); ctx.toast(e.message, true); }
+  };
   useEffect(() => { bridge().backend().then(setInfo).catch(() => {}); }, []);
 
   const save = async (body: Record<string, unknown>, msg = 'Saved') => {
@@ -99,6 +110,41 @@ export function SettingsPanel({ ctx, onClose }: { ctx: AppCtx; onClose: () => vo
           {provider === 'nvidia' && (
             <div className="small muted">Uses NVIDIA&apos;s hosted API (integrate.api.nvidia.com). Screenshots are only sent to vision models.</div>
           )}
+        </div>
+
+        <div className="card">
+          <div className="row"><Globe size={16} color="var(--accent)" /><div className="title grow">Browser engine</div></div>
+          <div className="segmented">
+            <button className={(s?.default_engine || 'chromium') === 'chromium' ? 'on' : ''} onClick={() => save({ default_engine: 'chromium' }, 'New tabs use the built-in browser')}>Built-in (Chromium)</button>
+            <button className={s?.default_engine === 'firefox' ? 'on' : ''} disabled={!ff.installed}
+              onClick={() => save({ default_engine: 'firefox' }, 'New tabs open in Firefox')}>Firefox</button>
+          </div>
+          <div className="small muted">
+            Default for tabs without an account; each account can choose its own browser (Accounts). Firefox opens in its own
+            window next to AutoBrowser. Recording, runs, data and private mode work the same in both.
+          </div>
+          {ff.installed ? (
+            <div className="small row" style={{ color: 'var(--ok)' }}><Check size={13} /> Firefox engine installed</div>
+          ) : (
+            <>
+              <button className="btn sm" disabled={ff.busy} onClick={installFirefox}>
+                {ff.busy ? <Loader2 size={13} className="spin" /> : <Download size={13} />} {ff.busy ? 'Downloading Firefox…' : 'Install Firefox engine (~95 MB)'}
+              </button>
+              {ff.busy && ff.line && <div className="small muted mono ellipsis">{ff.line}</div>}
+            </>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="row"><Lock size={16} color="var(--ok)" /><div className="title grow">Private mode</div>
+            <input type="checkbox" aria-label="Private mode" checked={s?.privacy_mode ?? true}
+              onChange={(e) => save({ privacy_mode: e.target.checked }, e.target.checked ? 'Private mode on: the AI sees code, not data' : 'Private mode off')} /></div>
+          <div className="small muted">
+            The AI reads each page&apos;s <b>code</b> (HTML structure, ids, classes, field names, labels, column headers, button captions)
+            but never its <b>data</b>: every value is masked by shape (“John Smith 2024” → “Xxxx Xxxxx 9999”), URLs lose their
+            parameters, and no screenshots are sent. Real values are put back on your computer after the AI answers.
+            Use it for government, banking, health or any personal data.
+          </div>
         </div>
 
         <div className="card">

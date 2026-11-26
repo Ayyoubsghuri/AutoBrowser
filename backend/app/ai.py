@@ -156,6 +156,159 @@ def _call_openai_compatible(provider, system, content, schema, effort, max_token
     return data
 
 
+# --------------------------------------------------------------------------- private mode
+# The AI may read the site's *code* (tags, ids, classes, names, labels, headers),
+# never its *data*. Data values are replaced by their shape: "Jo 12" -> "Xx 99".
+
+import copy
+import unicodedata
+from urllib.parse import urlsplit
+
+_TEMPLATE = re.compile(r"^\s*(\{\{[^}]+\}\}\s*)+$")
+
+
+def mask_text(value: Any, max_len: int = 40) -> Any:
+    if not isinstance(value, str) or not value or _TEMPLATE.match(value):
+        return value
+    out = []
+    for ch in " ".join(value.split()):
+        if ch.isdigit():
+            out.append("9")
+        elif ch.isalpha():
+            out.append("X" if unicodedata.category(ch) == "Lu" else "x")
+        else:
+            out.append(ch)
+    m = "".join(out)
+    return m if len(m) <= max_len else f"{m[:max_len]}…({len(value)})"
+
+
+def mask_url(url: Any) -> Any:
+    if not isinstance(url, str) or not url or "{{" in url:
+        return url
+    try:
+        u = urlsplit(url)
+    except ValueError:
+        return mask_text(url)
+    path = re.sub(r"\d+", "9", u.path)
+    query = "&".join(f"{kv.split('=')[0]}=…" for kv in u.query.split("&") if kv)
+    return f"{u.scheme}://{u.netloc}{path}" + (f"?{query}" if query else "") if u.scheme else mask_text(url)
+
+
+def mask_deep(v: Any) -> Any:
+    if isinstance(v, dict):
+        return {k: mask_deep(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [mask_deep(x) for x in v]
+    return mask_text(v) if isinstance(v, str) else ("9" if isinstance(v, (int, float)) and not isinstance(v, bool) else v)
+
+
+def redact_target(t: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not t:
+        return t
+    t = dict(t)
+    # text selectors are page *content*; attribute/structure selectors are the site's code
+    t["selectors"] = [c for c in t.get("selectors") or [] if c.get("kind") != "text"]
+    for k in ("text",):
+        if t.get(k):
+            t[k] = mask_text(t[k])
+    if t.get("sample"):
+        t["sample"] = mask_deep(t["sample"])
+    if t.get("frame"):
+        t["frame"] = mask_url(t["frame"])
+    t.pop("rect", None)
+    return t
+
+
+def redact_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = []
+    for s in steps:
+        s = dict(s)
+        s["target"] = redact_target(s.get("target"))
+        if s["target"] is None:
+            s.pop("target")
+        for k in ("url",):
+            if s.get(k):
+                s[k] = mask_url(s[k])
+        for k in ("value", "label"):
+            if s.get(k):
+                s[k] = mask_text(s[k])
+        if "sample" in s:
+            s["sample"] = mask_deep(s["sample"])
+        if s.get("steps"):
+            s["steps"] = redact_steps(s["steps"])
+        out.append(s)
+    return out
+
+
+def _index_steps(steps: list[dict[str, Any]], acc: dict[str, dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
+    acc = {} if acc is None else acc
+    for s in steps:
+        if s.get("id"):
+            acc[s["id"]] = s
+        _index_steps(s.get("steps") or [], acc)
+    return acc
+
+
+def restore_private(compiled_steps: list[dict[str, Any]], recorded: list[dict[str, Any]]) -> None:
+    """Put back the real values the AI only saw masked (same step id => same step)."""
+    originals = _index_steps(recorded)
+
+    def fix(steps: list[dict[str, Any]]) -> None:
+        for s in steps:
+            o = originals.get(s.get("id") or "")
+            if o and o.get("type") == s.get("type"):
+                if s.get("url") and o.get("url") and s["url"] == mask_url(o["url"]):
+                    s["url"] = o["url"]
+                for k in ("value", "label"):
+                    if s.get(k) and o.get(k) and s[k] == mask_text(o[k]):
+                        s[k] = o[k]
+                ot = o.get("target") or {}
+                st = s.get("target")
+                if st is not None and ot:
+                    have = {c.get("value") for c in st.get("selectors") or []}
+                    st.setdefault("selectors", []).extend(
+                        c for c in ot.get("selectors") or [] if c.get("kind") == "text" and c.get("value") not in have)
+                    for k in ("text", "frame"):
+                        if ot.get(k) and (not st.get(k) or st[k] == mask_text(ot[k]) or st[k] == mask_url(ot[k])):
+                            st[k] = ot[k]
+            fix(s.get("steps") or [])
+
+    fix(compiled_steps)
+
+
+PRIVATE_RULES = """
+PRIVATE MODE: you see the site's code, never its data. Every data value in the recording and the
+page outlines is masked by shape (X = upper-case letter, x = lower-case, 9 = digit; "…" = cut).
+- Never put masked strings into selectors, values or conditions; build selectors from ids, classes,
+  names, roles, data-* attributes, labels, column headers and structure.
+- Keep the recorded `id` on every step that comes from a recorded step, so the real values can be
+  restored locally after you answer.
+- In `understanding`, describe the data by its field names, not by example values."""
+
+OUTLINE_RULES = """
+Recorded steps may carry `page_outline`: an indented outline of the page's HTML at that moment
+(tags with #id .classes and key attributes; data shown by shape, long runs of similar rows
+collapsed). Use it to pick stable selectors, row containers, column order and pagination controls.
+Never copy `page_outline` into your steps."""
+
+_MAX_OUTLINE_CHARS = 60000
+
+
+def _cap_outlines(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    budget = _MAX_OUTLINE_CHARS
+    out = []
+    for s in steps:
+        if s.get("page_outline"):
+            s = dict(s)
+            if budget <= 0:
+                s.pop("page_outline")
+            else:
+                s["page_outline"] = s["page_outline"][:budget]
+                budget -= len(s["page_outline"])
+        out.append(s)
+    return out
+
+
 # --------------------------------------------------------------------------- compile
 
 COMPILE_SYSTEM = """You turn a browser recording into a robust, repeatable automation flow.
@@ -171,6 +324,27 @@ Input: the steps a user recorded by clicking around a website, in order. Each st
   no selector can express it, an `ai` step with a precise `instruction`.
 - Prefer deterministic steps over `ai` steps: they are free, fast and need no API key at run time.
 - Keep every recorded selector candidate you can; put the most stable first (testid, id, aria, name, then css, then text).
+- Details on each item's own page (e.g. the price is only on the product page): Pick-table the list
+  (`extract_table`, named e.g. "products"; its rows include `_link`), then ONE `loop` step
+  {"over":"items","from":"products","open":"link"} whose child steps run on each item's page
+  (extract_text there; results merge with the item's list columns). Without links use
+  {"over":"items","open":"click","list_url":<list page url>,"row_selector":<css of each row>,
+  "click_target":{"selectors":[{"kind":"css","value":"{{row}} a"}]}}. Inside, {{item.<column>}} is the
+  current item. If the list has several pages, put the extract_table inside an until_missing loop
+  first (rows accumulate), then the items loop after it. A recorded `loop` with over "items" is
+  already correct: keep it.
+- File fields: an `upload` step (target = the input[type=file], value = full path(s) separated by ';' or a
+  column such as {{row.file_path}} - PDF data sources provide `file_path`). Never click a file field.
+- Downloads: a `download` step whose target is the link/button that downloads, value = file name to save
+  as, e.g. "receipt_{{row.Case ID}}.pdf" (empty keeps the site's name); the saved path goes into the
+  row's results.
+- New tabs / pop-up windows opened by the page are followed automatically, and when they close the
+  flow continues on the page that opened them. Use a `tab` step with value "close" to close a pop-up
+  that stays open (or "back" to return without closing).
+- Where a person is needed (CAPTCHA, SMS / e-mail code that is not a saved TOTP, a final check before
+  submitting), add a `pause` step with `value` telling the person what to do; add
+  `condition` {"captcha": true} to pause only when a CAPTCHA is actually showing. Steps that fail
+  while a CAPTCHA is visible pause automatically and are retried.
 - Recognise login sequences (username + password + submit) and replace them with ONE `login` step
   whose target selectors map: {"username": [...], "password": [...], "submit": [...], "totp": [...]} in `value` as JSON,
   plus `condition` {"exists": <username field css>} so it is skipped when the session is already logged in.
@@ -253,17 +427,63 @@ def _strip_secrets(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def compile_flow(
+DATA_RULES = """
+DATA: this flow runs ONCE PER ROW of the user's data (Excel / CSV / PDFs, possibly joined from several
+files). Steps before the step whose id is `start_step_id` run once (e.g. login); that step and all
+after it run for every row. Keep that id on the step that starts the per-row part, and make the
+per-row part end in a state where it can start again (e.g. back on an empty form).
+- Values can be formatted with filters, e.g. {{row.Date | date:DD/MM/YYYY}}, {{row.Name | upper}}; available:
+  upper, lower, title, trim, digits, nospace, first, last, slice:a:b, replace:"x":"y", split:" ":1, pad:6,
+  prefix:"+", suffix:"", default:"-", number:2 (number:2:, for a comma), yesno:Oui:Non,
+  date:<format with YYYY YY MM M DD D HH mm ss>, parsedate:MM/DD/YYYY (read unusual input orders first).
+  Excel dates arrive as YYYY-MM-DD.
+- Use {{row.<column>}} in `value` / `url` / `instruction` (columns of joined files under a prefix: {{row.<prefix>.<column>}}).
+- Checkboxes, radios and switches: a `check` step whose `value` is "true", "false" or {{row.<column>}}
+  (yes / x / 1 / true / oui count as on). Do not use `click` for these: clicking toggles.
+- Row conditions: `if` step (or `condition` on any step) {"row": "<column>", "op": "truthy|falsy|empty|not_empty|equals|not_equals|contains", "value": "..."}.
+- Do NOT add a `loop` over the data rows: the runner already repeats per row. Use loops only for things on the page.
+- If the row has a value worth recording after submitting (a confirmation number), extract it with an
+  `extract_text` step: per-row extracts are added to that row's result."""
+
+
+def _data_context(flow: dict[str, Any], private: bool) -> str | None:
+    cfg = flow.get("data")
+    if not cfg:
+        return None
+    from . import data_rows
+    try:
+        columns, rows, total = data_rows.resolve(cfg)
+    except LookupError:
+        return None
+    sample = {k: v for k, v in (rows[0] if rows else {}).items() if not k.startswith("_")}
+    info = {
+        "rows": total,
+        "columns": columns,
+        "joins": [{"left": j.get("left"), "right": j.get("right"), "prefix": j.get("prefix")} for j in cfg.get("joins") or []],
+        "filter": cfg.get("filter"),
+        "start_step_id": cfg.get("start_step_id"),
+        "example_row": mask_deep(sample) if private else sample,
+    }
+    return "DATA:\n" + json.dumps(info, ensure_ascii=False, indent=1)
+
+
+def build_compile_prompt(
     flow: dict[str, Any],
     goal: str | None = None,
     output_kind: str | None = None,
     output_fields: list[str] | None = None,
     feedback: str | None = None,
-) -> dict[str, Any]:
+    private: bool | None = None,
+) -> tuple[str, str]:
+    """Returns (system, user text) exactly as they would be sent to the AI."""
+    private = settings_store.get_privacy() if private is None else private
+    steps = _cap_outlines(_strip_secrets(flow.get("steps") or []))
+    if private:
+        steps = redact_steps(steps)
     payload = {
         "name": flow["name"],
-        "start_url": flow.get("start_url"),
-        "recorded_steps": _strip_secrets(flow.get("steps") or []),
+        "start_url": mask_url(flow.get("start_url")) if private else flow.get("start_url"),
+        "recorded_steps": steps,
     }
     goal = goal or flow.get("description")
     parts = []
@@ -276,17 +496,35 @@ def compile_flow(
     if not goal:
         parts.append("No goal given: infer the most likely intent from the recording and say so in `understanding`.")
     parts.append("RECORDING:\n" + json.dumps(payload, ensure_ascii=False, indent=1))
+    data_note = _data_context(flow, private)
+    if data_note:
+        parts.append(data_note)
     previous = flow.get("compiled")
     if feedback and previous:
-        prev = {k: previous.get(k) for k in ("understanding", "output_fields", "steps")}
+        prev_steps = previous.get("steps")
+        prev = {"understanding": previous.get("understanding"), "output_fields": previous.get("output_fields"),
+                "steps": redact_steps(prev_steps or []) if private else prev_steps}
         parts.append("PREVIOUS BUILD:\n" + json.dumps(prev, ensure_ascii=False, indent=1))
         parts.append(f"FEEDBACK to apply:\n{feedback}")
     elif feedback:
         parts.append(f"Extra instructions from the user:\n{feedback}")
+    system = COMPILE_SYSTEM + GOAL_RULES + OUTLINE_RULES + (DATA_RULES if flow.get("data") else "") + (PRIVATE_RULES if private else "")
+    return system, "\n\n".join(parts)
 
+
+def compile_flow(
+    flow: dict[str, Any],
+    goal: str | None = None,
+    output_kind: str | None = None,
+    output_fields: list[str] | None = None,
+    feedback: str | None = None,
+) -> dict[str, Any]:
+    private = settings_store.get_privacy()
+    goal = goal or flow.get("description")
+    system, text = build_compile_prompt(flow, goal, output_kind, output_fields, feedback, private)
     result = _call_json(
-        COMPILE_SYSTEM + GOAL_RULES,
-        [{"type": "text", "text": "\n\n".join(parts)}],
+        system,
+        [{"type": "text", "text": text}],
         COMPILE_SCHEMA,
         effort="high",
         max_tokens=32000,
@@ -294,7 +532,12 @@ def compile_flow(
     raw = result["steps_json"]
     raw_steps = raw if isinstance(raw, list) else json.loads(raw)
     steps = [Step.model_validate(s).model_dump(exclude_none=True) for s in raw_steps]
+    if private:
+        restore_private(steps, flow.get("steps") or [])
+        if flow.get("compiled") and feedback:
+            restore_private(steps, flow["compiled"].get("steps") or [])
     return {
+        "private": private,
         "goal": goal,
         "summary": result["summary"],
         "understanding": result["understanding"],
@@ -353,14 +596,28 @@ def _snapshot_content(snap, header: str) -> list[dict[str, Any]]:
     return content
 
 
+def _private_snapshot(snap):
+    snap = snap.model_copy()
+    snap.screenshot_b64 = None  # never send pixels in private mode
+    return snap
+
+
 def act(req: ActRequest) -> dict[str, Any]:
+    private = settings_store.get_privacy()
+    snap = _private_snapshot(req.snapshot) if private else req.snapshot
     header = f"Instruction: {req.instruction}\n"
+    if private:
+        header += ("PRIVATE MODE: page data is masked by shape (X/x = letters, 9 = digits). Choose elements by "
+                   "structure, labels and position. To type a variable, write it as a template, e.g. {{row.name}}; "
+                   "it is filled in locally.\n")
     if req.variables:
         safe = {k: v for k, v in req.variables.items() if "password" not in k and "totp" not in k}
+        if private:
+            safe = mask_deep(safe)
         header += f"Variables: {json.dumps(safe, ensure_ascii=False)}\n"
     if req.history:
         header += "Actions taken so far:\n- " + "\n- ".join(req.history[-15:]) + "\n"
-    return _call_json(ACT_SYSTEM, _snapshot_content(req.snapshot, header), ACT_SCHEMA, effort="low", max_tokens=4000)
+    return _call_json(ACT_SYSTEM, _snapshot_content(snap, header), ACT_SCHEMA, effort="low", max_tokens=4000)
 
 
 LOCATE_SCHEMA = {
@@ -376,9 +633,99 @@ LOCATE_SCHEMA = {
 
 
 def locate(req: LocateRequest) -> dict[str, Any]:
+    if settings_store.get_privacy():
+        req = req.model_copy(update={"snapshot": _private_snapshot(req.snapshot),
+                                     "recorded": redact_target(req.recorded),
+                                     "description": mask_text(req.description, 120) if req.description else req.description})
     header = (
         "A recorded selector no longer matches. Find the element that best matches this description.\n"
         f"Description: {req.description}\nRecorded element: {json.dumps(req.recorded or {}, ensure_ascii=False)[:1500]}\n"
         "Return index -1 if nothing matches."
     )
     return _call_json("You locate elements on web pages.", _snapshot_content(req.snapshot, header), LOCATE_SCHEMA, effort="low", max_tokens=2000)
+
+
+# --------------------------------------------------------------------------- data sources (Excel / PDF)
+
+def is_local_provider() -> bool:
+    if settings_store.get_provider() != "openai":
+        return False
+    base = (settings_store.get_base_url("openai") or "").lower()
+    return any(h in base for h in ("://localhost", "://127.0.0.1", "://0.0.0.0", "://[::1]"))
+
+
+def template_text(texts: list[str]) -> list[str]:
+    """Private mode for PDFs: words that appear in *every* file are the form's own labels;
+    everything else is data and gets masked by shape."""
+    token = re.compile(r"\S+")
+    common = set(token.findall(texts[0])) if texts else set()
+    for t in texts[1:]:
+        common &= set(token.findall(t))
+    if len(texts) < 2:
+        common = set()
+    out = []
+    for t in texts:
+        lines = []
+        for line in t.splitlines():
+            lines.append(token.sub(lambda m: m.group(0) if m.group(0) in common else mask_text(m.group(0), 30), line))
+        out.append("\n".join(lines))
+    return out
+
+
+RULES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "rules": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["form_field", "after_label", "regex"]},
+                    "pattern": {"type": "string"},
+                },
+                "required": ["name", "kind", "pattern"],
+                "additionalProperties": False,
+            },
+        },
+        "notes": {"type": "string"},
+    },
+    "required": ["rules", "notes"],
+    "additionalProperties": False,
+}
+
+
+def suggest_pdf_rules(files: list[dict[str, Any]], fields: list[str]) -> dict[str, Any]:
+    private = settings_store.get_privacy() and not is_local_provider()
+    sample = files[:3]
+    texts = [f.get("text", "")[:6000] for f in sample]
+    if private:
+        texts = template_text(texts)
+    form_fields = sorted({k for f in files for k in f.get("fields", {})})
+    body = [
+        f"Fields the user wants from each PDF: {', '.join(fields) if fields else '(suggest the useful ones)'}",
+        f"Fillable form fields present: {', '.join(form_fields) if form_fields else 'none'}",
+    ]
+    for i, t in enumerate(texts):
+        body.append(f"--- PDF {i + 1} text ---\n{t}")
+    system = (
+        "You write extraction rules that run locally on PDF text, one rule per wanted field.\n"
+        "kinds: form_field (pattern = exact fillable field name, best when present), after_label (pattern = the "
+        "label text printed before the value, e.g. 'Invoice No'), regex (Python regex, use one capture group).\n"
+        "Prefer form_field, then after_label, then regex. Field `name` is the column name the user will see."
+    )
+    if private:
+        system += ("\nPRIVATE MODE: words that differ between files are masked by shape (X/x letters, 9 digits); "
+                   "only the form's shared labels are readable. Build rules from labels and value shapes.")
+    return _call_json(system, [{"type": "text", "text": "\n\n".join(body)}], RULES_SCHEMA, effort="medium", max_tokens=8000)
+
+
+def extract_pdf_values(f: dict[str, Any], fields: list[str]) -> dict[str, str]:
+    schema = {"type": "object", "properties": {k: {"type": "string"} for k in fields},
+              "required": list(fields), "additionalProperties": False}
+    text = f.get("text", "")[:30000]
+    form = json.dumps(f.get("fields", {}), ensure_ascii=False)[:4000]
+    return _call_json(
+        "Extract the requested fields from this document. Use an empty string when a field is absent. Copy values exactly.",
+        [{"type": "text", "text": f"Fields: {', '.join(fields)}\nForm fields: {form}\n\nDocument text:\n{text}"}],
+        schema, effort="low", max_tokens=4000)

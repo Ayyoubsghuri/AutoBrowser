@@ -106,3 +106,13 @@ def test_call_json_uses_fallbacks(monkeypatch):
     assert ai._call_json("s", [{"type": "text", "text": "t"}], {"type": "object"}, "low") == {"a": 1}
     assert calls["fallbacks"] == "default" and calls["model"] == "claude-opus-5-5"
     assert calls["output_config"]["format"]["type"] == "json_schema"
+
+
+def test_profile_engine_and_default_engine(client):
+    p = client.post("/profiles", json={"name": "FF account", "engine": "firefox"}).json()
+    assert p["engine"] == "firefox"
+    assert client.post("/profiles", json={"name": "Default"}).json()["engine"] == "chromium"
+    assert client.patch(f"/profiles/{p['id']}", json={"engine": "chromium"}).json()["engine"] == "chromium"
+    assert client.post("/profiles", json={"name": "x", "engine": "safari"}).status_code == 422
+    assert client.get("/settings").json()["default_engine"] == "chromium"
+    assert client.put("/settings", json={"default_engine": "firefox"}).json()["default_engine"] == "firefox"

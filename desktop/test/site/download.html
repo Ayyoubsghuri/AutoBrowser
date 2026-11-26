@@ -1,0 +1,11 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Demo Office – Receipt</title>
+<style>body{font-family:system-ui;padding:30px;background:#f6f7fb}a{display:inline-block;padding:10px 16px;border-radius:8px;background:#4f46e5;color:#fff;text-decoration:none}</style></head>
+<body><h1>Your receipt</h1><p id="case"></p>
+<a id="get" href="#">Download receipt</a>
+<script>
+const id = new URLSearchParams(location.search).get('id') || '0';
+document.getElementById('case').textContent = 'Case ' + id;
+const a = document.getElementById('get');
+a.href = 'data:text/plain;charset=utf-8,' + encodeURIComponent('Receipt for case ' + id);
+a.download = 'receipt.txt';
+</script></body></html>

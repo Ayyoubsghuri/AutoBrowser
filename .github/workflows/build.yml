@@ -17,9 +17,27 @@ jobs:
       - run: pip install -r backend/requirements-dev.txt
       - run: cd backend && python -m pytest -q
       - run: cd frontend && npm ci && npm run lint && npm run build
-      - run: cd desktop && npm ci && npm run check
+      - run: cd desktop && npm ci && npm run check && npm run test:unit
       - name: End-to-end (record + replay in the real app)
         run: cd desktop && xvfb-run -a -s "-screen 0 1440x920x24" npm run test:e2e
+
+  firefox:
+    # Playwright's Firefox build supports Ubuntu up to 24.04 (ubuntu-latest may be newer)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: pip install -r backend/requirements-dev.txt
+      - run: cd frontend && npm ci && npm run build
+      - name: End-to-end with the Firefox engine
+        run: |
+          cd desktop
+          npm ci
+          PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/pw node node_modules/playwright-core/cli.js install --with-deps firefox
+          AB_BROWSERS=$RUNNER_TEMP/pw xvfb-run -a -s "-screen 0 1440x920x24" npm run test:e2e:firefox
 
   windows-exe:
     needs: test

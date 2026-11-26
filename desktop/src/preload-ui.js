@@ -1,9 +1,9 @@
 // Bridge between the Next.js UI and the Electron main process.
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const EVENTS = new Set([
-  'tabs:update', 'tabs:error', 'rec:step', 'rec:state', 'rec:navigated',
-  'run:log', 'run:status', 'run:output', 'download:done', 'ui:focus-address', 'ui:new-tab',
+  'tabs:update', 'tabs:error', 'rec:step', 'rec:state', 'rec:navigated', 'rec:download',
+  'run:log', 'run:status', 'run:output', 'run:progress', 'run:paused', 'run:resumed', 'engine:progress', 'download:done', 'ui:focus-address', 'ui:new-tab',
 ]);
 
 const inv = (ch) => (...args) => ipcRenderer.invoke(ch, ...args);
@@ -21,14 +21,20 @@ contextBridge.exposeInMainWorld('autobrowser', {
     forward: inv('tabs:forward'),
     reload: inv('tabs:reload'),
     setProfile: inv('tabs:set-profile'),
+    showFirefox: inv('tabs:show-firefox'),
   },
   setPageBounds: inv('ui:page-bounds'),
+  previewTemplate: inv('template:preview'),
+  engine: { status: inv('engine:status'), installFirefox: inv('engine:install-firefox') },
   profiles: { refresh: inv('profiles:refresh'), clearData: inv('profiles:clear-data') },
   settings: { refresh: inv('settings:refresh') },
   recorder: { start: inv('rec:start'), stop: inv('rec:stop'), setMode: inv('rec:mode') },
-  runner: { run: inv('runner:run'), stop: inv('runner:stop') },
+  runner: { run: inv('runner:run'), stop: inv('runner:stop'), resume: inv('runner:resume') },
   openExternal: inv('shell:open'),
+  // full path of a file picked in an <input type=file> (to save results next to the original)
+  pathForFile: (file) => { try { return webUtils.getPathForFile(file) || null; } catch { return null; } },
   saveFile: inv('file:save'),
+  pickFiles: inv('file:pick'),
   on(channel, cb) {
     if (!EVENTS.has(channel)) throw new Error(`unknown channel ${channel}`);
     const fn = (_e, payload) => cb(payload);

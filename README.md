@@ -45,6 +45,65 @@ Replay it exactly with no AI, or let Claude turn it into a smarter automation
 
 Results (tables, text) are listed under **Runs** and can be exported as CSV or JSON.
 
+### Getting details from every item of a list (record one, get all)
+The price, stock or anything else is often only on each item's own page. Record it **once**:
+
+1. On the list page, **Pick table** on any item. That captures every item and its link.
+2. Click **one** item to open it, then **Pick text** on what you want (name the step, e.g. `price`).
+3. Stop, then on the click step press **"Repeat the next steps for every item"**.
+
+AutoBrowser opens every item: by its link, or by clicking its row on the list page when there is no link.
+It runs your steps there and returns one table (`products_details`) with each item's list columns plus the values
+you picked. Items that fail get `_status: failed` and the run carries on. **Undo** on the loop turns it back into the
+original steps. "Build with AI" can also produce this loop from a goal like *"price of every product, all pages"*.
+
+### Filling websites from Excel, CSV or PDFs
+1. **Data** (spreadsheet icon) → **Import** an `.xlsx`, `.xls` or `.csv` (pick the sheet and header row), or several **PDFs**:
+   each PDF becomes one row. Fields come from fillable PDF form fields, or from rules you set: *after label*
+   ("File number") or a regex. **Suggest rules** asks the AI; in private mode it only sees the labels shared by all
+   your PDFs. Everything else stays local.
+2. **Recorder** → *Data* → choose the file. Record one entry by hand using row 1. Values you type that match the row
+   become `{{row.Column}}` automatically, and you can also pick a column on any step. Checkboxes are recorded as
+   **set on / off** steps and can follow a column (yes / x / 1 / true / oui = ticked).
+3. Steps before **"Repeats for each data row from here"** (e.g. logging in) run once; the rest run for every row.
+   Move the marker with ↻ on a step.
+4. **Flows → your flow → Data**: **link another file** by a shared column (like VLOOKUP), so a second Excel adds
+   columns to the first. You can also filter rows (e.g. only where *Status* is empty), set a start row or maximum, and
+   choose whether to stop at the first error.
+5. **Run**: progress shows per row. Under **Runs** → **Excel**, you get your rows back with `_status`, `_message` and
+   any values extracted per row (e.g. the confirmation number the site showed).
+
+### Formatting values
+Add a filter after any value: `{{row.Date | date:DD/MM/YYYY}}`, `{{row.Name | upper}}`, `{{row.Phone | digits}}`,
+`{{row.Amount | number:2}}`, `{{row.City | default:"Rabat"}}`. Step cards have a **ƒ format…** menu and show a live
+preview for the current row. Filters: `upper lower title trim digits nospace first last slice:a:b replace:"x":"y"
+split:" ":1 pad:6 prefix:"+" suffix:"" default:"-" number:2 yesno:Oui:Non date:<format> parsedate:<input format>`.
+Excel date numbers and day-first dates (31/12/2024) are understood.
+
+### When a person is needed
+- **Pause for me** step (Recorder → *Add "pause for me" step*): the run stops with your message, the tab comes to
+  the front, the taskbar flashes and Windows shows a notification. Then choose **Continue**, **Skip this row**
+  or **Stop**. Tick *only when a CAPTCHA is on the page* to pause only when needed.
+- If a step fails while a **CAPTCHA** is visible (reCAPTCHA, hCaptcha, Cloudflare…), the run pauses by itself,
+  and after you solve it and press Continue, the step is tried again.
+
+### Results back into your file
+After a data run, **Runs → Your file + results** saves your original Excel (formatting kept) or CSV with
+`AutoBrowser status`, `AutoBrowser message` and anything picked up per row (e.g. the reference number). The
+save dialog starts at the file's original location. **Re-run N failed** repeats only the rows that failed or were
+skipped. Statuses are also kept in the data source, so the flow option **skip rows already done** works across runs.
+
+### Pop-ups, uploads and downloads
+- Windows and tabs opened by the site (payment, confirmation, print pages) are followed by recordings and
+  runs, and they return to the original page when the pop-up closes. The link between the two pages is kept,
+  so sites that talk to their pop-ups keep working.
+- **Upload:** choosing a file in a site's file field is recorded as an upload step. Set a full path, choose files
+  with 📂, or use a column. PDF data sources provide `{{row.file_path}}`, so each row can upload its own PDF. No
+  file dialog opens during runs.
+- **Download:** a click that downloads a file is recorded as a download step. Name the file per row, e.g.
+  `receipt_{{row.Case ID}}` (the site's extension is kept). Files go to `Downloads\AutoBrowser\<flow name>` or a
+  folder you choose, and the saved path is added to the row's results.
+
 ### AI providers
 Pick one in **Settings → AI**; each keeps its own encrypted key and model:
 
@@ -56,8 +115,38 @@ Pick one in **Settings → AI**; each keeps its own encrypted key and model:
 
 You can type any model id your account can use.
 
+### Private mode (on by default): the AI reads the code, never the data
+For government, banking, health or any personal data. With **Settings → Private mode** on:
+
+- While recording, each page is saved as a **code outline**: HTML structure, ids, classes, field names,
+  labels, column headers and button captions. Every data value is masked by its shape:
+  `John Smith 2024-05-01` → `Xxxx Xxxxx 9999-99-99`, `$1,250.00` → `$9,999.99`. Long lists collapse to
+  "… 47 more rows like the ones above".
+- **Build with AI** sends only that outline and your steps with values masked, URL parameters
+  removed (`?id=…`) and text-based selectors dropped. The AI builds loops, pagination and extraction from the
+  structure; the real selectors and values are **put back on your computer** after it answers.
+- **During runs**, AI steps get the masked outline instead of the page text, **no screenshots**, and
+  `{{row.x}}` placeholders instead of real row values (filled in locally when typing).
+- **Preview what the AI will see** on the Build with AI screen shows the exact text that would be sent.
+- Passwords and 2FA codes are never sent in any mode. Your own goal text is sent as written, so don't paste data into it.
+
+For zero data leaving the machine at all, combine private mode with a local model (OpenAI provider +
+`http://localhost:11434/v1` for Ollama), or skip AI and run flows in **Exact** mode.
+
 ### Templates you can use in values
 `{{account.username}}` `{{account.password}}` `{{account.totp}}` `{{today}}` `{{now}}` `{{row.<column>}}` (inside a row loop) `{{vars.<name>}}` (results of earlier extract steps)
+
+## Browser engine: built-in Chromium or Firefox
+
+AutoBrowser's own tabs are Chromium (Electron can only embed Chromium). You can also use **Firefox**:
+
+- **Settings → Browser engine → Install Firefox engine** downloads Playwright's Firefox build (~95 MB) once.
+- Pick Firefox as the **default** for new tabs, or per account (**Accounts → Browser**). Each Firefox account keeps
+  its own profile, logins and cookies.
+- Firefox opens in **its own window** next to AutoBrowser. The tab bar shows it with an `FF` badge, and
+  **Show Firefox window** brings it forward. Recording, Pick table/text, runs, Excel/PDF data, AI steps and private mode
+  all work the same as with the built-in browser.
+- Sites see a normal Firefox: real Firefox user agent and `navigator.webdriver === false`.
 
 ## Staying under the radar
 

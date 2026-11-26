@@ -10,16 +10,18 @@ const { ipcRenderer, contextBridge, webFrame } = require('electron');
 // ---------------------------------------------------------------- 1. stealth
 function stealthPatch(cfg) {
   try {
+    const firefox = cfg.engine === 'firefox';
     const nativeToString = Function.prototype.toString;
     const fake = new WeakMap();
-    const mark = (fn, name) => { fake.set(fn, `function ${name}() { [native code] }`); return fn; };
+    const nativeText = (name) => (firefox ? `function ${name.replace(/^get /, '')}() {\n    [native code]\n}` : `function ${name}() { [native code] }`);
+    const mark = (fn, name) => { fake.set(fn, nativeText(name)); return fn; };
     const toStringProxy = new Proxy(nativeToString, {
       apply(target, thisArg, args) {
         if (fake.has(thisArg)) return fake.get(thisArg);
         return Reflect.apply(target, thisArg, args);
       },
     });
-    fake.set(toStringProxy, 'function toString() { [native code] }');
+    fake.set(toStringProxy, nativeText('toString'));
     Function.prototype.toString = toStringProxy;
 
     const getter = (obj, prop, value) => {
@@ -32,6 +34,7 @@ function stealthPatch(cfg) {
     };
 
     getter(Navigator.prototype, 'webdriver', false);
+    if (firefox) return; // Firefox already looks like Firefox; only the automation flag needs hiding
     getter(Navigator.prototype, 'languages', Object.freeze(cfg.languages.slice()));
     getter(Navigator.prototype, 'hardwareConcurrency', cfg.hardwareConcurrency);
 
@@ -222,7 +225,7 @@ function resolveScope(scope) {
   return rows[scope.index] || null;
 }
 
-function findElement(target, scope) {
+function findElement(target, scope, { allowHidden = false } = {}) {
   const root = resolveScope(scope);
   if (!root || !target) return null;
   for (const cand of target.selectors || []) {
@@ -240,7 +243,7 @@ function findElement(target, scope) {
     const found = queryCandidate(c, r);
     const vis = found.filter(isVisible);
     if (vis.length) return vis[0];
-    if (found.length && target.tag === 'input') return found[0];
+    if (found.length && (allowHidden || target.tag === 'input')) return found[0];
   }
   return null;
 }
@@ -259,6 +262,43 @@ function findRepeatedContainer(el) {
     if (same.length >= 3) return { container: parent, kind: 'list', rowSig: sig, rowEl: cur };
   }
   return null;
+}
+
+// Where a click happened inside a repeated list (table rows, product cards…), so the
+// recording can be turned into "do this for every item".
+function relPath(root, el) {
+  const parts = [];
+  for (let cur = el; cur && cur !== root; cur = cur.parentElement) {
+    let part = cur.tagName.toLowerCase();
+    const parent = cur.parentElement;
+    if (parent) {
+      const same = Array.from(parent.children).filter((c) => c.tagName === cur.tagName);
+      if (same.length > 1) part += `:nth-of-type(${same.indexOf(cur) + 1})`;
+    }
+    parts.unshift(part);
+  }
+  return parts.join(' > ');
+}
+function listContext(el) {
+  try {
+    const info = findRepeatedContainer(el);
+    if (!info) return null;
+    const rowSel = rowSelectorFor(info);
+    const rows = rowsOf(info.container, rowSel);
+    const row = rows.find((r) => r.contains(el));
+    if (!row || rows.length < 2) return null;
+    const base = cssPath(info.container);
+    const rowSelector = info.kind === 'table' ? `${base} ${rowSel}` : `${base} > ${rowSel.replace(/^:scope >\s*/, '')}`;
+    const a = el.closest('a[href]');
+    return {
+      row_selector: rowSelector,
+      index: rows.indexOf(row),
+      count: rows.length,
+      inner: relPath(row, el),
+      link: a && !/^(javascript:|#)/i.test(a.getAttribute('href') || '') ? a.href : null,
+      list_url: location.href,
+    };
+  } catch { return null; }
 }
 
 function rowSelectorFor(info) {
@@ -311,6 +351,95 @@ function describeTable(container, kind, rowSelector) {
   return { rows, columns };
 }
 
+// ---------------------------------------------------------------- code-only page outline
+// "What the AI may see" in private mode: the page's structure (tags, ids, classes,
+// names, roles, field labels, column headers, button captions) with every piece of
+// data replaced by its *shape*:  "John Smith 2024-05-01" -> "Xxxx Xxxxx 9999-99-99".
+function maskText(s, max = 40) {
+  s = clean(s);
+  if (!s) return '';
+  const m = s.replace(/\p{Nd}|\p{L}/gu, (c) => (/\p{Nd}/u.test(c) ? '9' : /\p{Lu}/u.test(c) ? 'X' : 'x'));
+  return m.length > max ? `${m.slice(0, max)}…(${s.length})` : m;
+}
+const maskUrl = (u) => {
+  if (!u) return u;
+  try {
+    const x = new URL(u, location.href);
+    const path = x.pathname.replace(/\d+/g, '9').replace(/[^/]{24,}/g, '…');
+    const q = [...x.searchParams.keys()].map((k) => `${k}=…`).join('&');
+    return `${x.origin}${path}${q ? `?${q}` : ''}`;
+  } catch { return maskText(u); }
+};
+
+// Captions that are part of the site's UI, not its data.
+function isUiText(el) {
+  const tag = el.tagName;
+  if (['TH', 'LABEL', 'LEGEND', 'OPTGROUP', 'CAPTION'].includes(tag)) return true;
+  if (tag === 'BUTTON' || el.getAttribute('role') === 'button' || (tag === 'INPUT' && /submit|button|reset/.test(el.type))) {
+    return !el.closest('tbody, [role=row], li li'); // buttons inside data rows may carry data
+  }
+  if (tag === 'A' && el.closest('nav, header, footer, [role=navigation], .pagination, [aria-label*=pagination i]')) return true;
+  return false;
+}
+
+const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG', 'PATH', 'TEMPLATE', 'LINK', 'META', 'IFRAME', 'CANVAS', 'VIDEO', 'AUDIO', 'PICTURE', 'SOURCE', 'BR', 'HR', 'WBR']);
+const KEEP_ATTRS = ['name', 'type', 'role', 'data-testid', 'data-test', 'data-qa', 'data-cy', 'for', 'autocomplete', 'method', 'action'];
+
+function ownText(el) {
+  let t = '';
+  for (const n of el.childNodes) if (n.nodeType === 3) t += n.nodeValue;
+  return clean(t);
+}
+
+function describeEl(el, privateMode) {
+  const tag = el.tagName.toLowerCase();
+  let d = tag;
+  if (el.id) d += `#${looksDynamic(el.id) ? el.id.replace(/\d+/g, '9') : el.id}`;
+  const cls = Array.from(el.classList).filter((c) => !looksDynamic(c)).slice(0, 3);
+  if (cls.length) d += `.${cls.join('.')}`;
+  const attrs = [];
+  for (const a of KEEP_ATTRS) { const v = el.getAttribute(a); if (v) attrs.push(`${a}="${a === 'action' ? maskUrl(v) : short(v, 40)}"`); }
+  const ph = el.getAttribute('placeholder'); if (ph) attrs.push(`placeholder="${short(ph, 40)}"`);
+  const al = el.getAttribute('aria-label');
+  if (al) attrs.push(`aria-label="${isUiText(el) || /^(INPUT|SELECT|TEXTAREA|NAV)$/.test(el.tagName) ? short(al, 40) : maskText(al)}"`);
+  if (tag === 'a' && el.getAttribute('href')) attrs.push(`href="${maskUrl(el.getAttribute('href'))}"`);
+  if (/^(input|textarea)$/.test(tag) && el.value && el.type !== 'password') attrs.push(`value="${privateMode ? maskText(el.value) : short(el.value, 40)}"`);
+  if (el.disabled) attrs.push('disabled');
+  let line = `<${d}${attrs.length ? ' ' + attrs.join(' ') : ''}>`;
+  const t = ownText(el) || (tag === 'option' ? clean(el.text) : '');
+  if (t) line += ` "${isUiText(el) ? short(t, 40) : privateMode ? maskText(t) : short(t, 60)}"`;
+  return line;
+}
+
+const sig = (el) => `${el.tagName}.${el.classList[0] || ''}`;
+
+function pageOutline({ privateMode = true, maxLines = 500 } = {}) {
+  const lines = [`URL: ${maskUrl(location.href)}`, `TITLE: ${privateMode ? maskText(document.title, 60) : document.title}`];
+  const walk = (el, depth) => {
+    if (lines.length >= maxLines || SKIP.has(el.tagName)) return;
+    if (el.nodeType !== 1 || (el.checkVisibility && !el.checkVisibility()) ) return;
+    const kids = Array.from(el.children);
+    // skip pure wrappers (one child, no text, no identifying attributes)
+    const wrapper = kids.length === 1 && !ownText(el) && !el.id && !el.getAttribute('role') && !el.getAttribute('name') && !/^(FORM|TABLE|TBODY|THEAD|TR|UL|OL|SELECT|NAV|MAIN)$/.test(el.tagName);
+    if (!wrapper) lines.push(`${'  '.repeat(Math.min(depth, 12))}${describeEl(el, privateMode)}`);
+    const d = wrapper ? depth : depth + 1;
+    for (let i = 0; i < kids.length; i++) {
+      // collapse long runs of similar siblings (table rows, list items, cards)
+      let j = i;
+      while (j + 1 < kids.length && sig(kids[j + 1]) === sig(kids[i])) j++;
+      const run = j - i + 1;
+      if (run > 3) {
+        walk(kids[i], d); walk(kids[i + 1], d);
+        lines.push(`${'  '.repeat(Math.min(d, 12))}… ${run - 2} more <${kids[i].tagName.toLowerCase()}${kids[i].classList[0] ? '.' + kids[i].classList[0] : ''}> like the ones above`);
+        i = j;
+      } else walk(kids[i], d);
+    }
+  };
+  if (document.body) walk(document.body, 0);
+  if (lines.length >= maxLines) lines.push('… (outline truncated)');
+  return lines.join('\n');
+}
+
 // ---------------------------------------------------------------- 2. recorder
 let mode = 'off';
 let overlay = null;
@@ -344,9 +473,14 @@ function showBox(el, label) {
   overlay.tag.textContent = label;
 }
 
+let outlineSent = false;
 function emit(step) {
   step.ts = Date.now();
   step.url = step.url || location.href;
+  if (step.type !== 'notice' && (!outlineSent || step.type === 'extract_table')) {
+    // masked structure of this page, so the AI build can read the page's code without its data
+    try { step.page_outline = pageOutline({ privateMode: true, maxLines: step.type === 'extract_table' ? 500 : 300 }); outlineSent = true; } catch {}
+  }
   ipcRenderer.send('rec:step', step);
 }
 
@@ -380,15 +514,40 @@ function flushPending() {
 
 const CLICKABLE = 'a,button,[role=button],[role=link],[role=tab],[role=menuitem],[role=option],[role=checkbox],[role=switch],input[type=checkbox],input[type=radio],input[type=submit],input[type=button],label,summary,[onclick],[tabindex]';
 
+// Checkbox-like controls. `control` holds the state, `target` is what you click.
+function toggleControl(el) {
+  if (!el || el.nodeType !== 1) return null;
+  if (el.tagName === 'INPUT' && /^(checkbox|radio)$/i.test(el.type)) return { control: el, target: el };
+  const label = el.closest('label');
+  if (label && label.control && /^(checkbox|radio)$/i.test(label.control.type)) return { control: label.control, target: label.control };
+  const aria = el.closest('[role=checkbox],[role=switch],[role=radio],[role=menuitemcheckbox]');
+  if (aria) return { control: aria, target: aria };
+  return null;
+}
+function isChecked(c) {
+  if (!c) return false;
+  if (c.tagName === 'INPUT') return !!c.checked;
+  return c.getAttribute('aria-checked') === 'true' || c.getAttribute('aria-pressed') === 'true';
+}
+
 function onClick(e) {
   if (!e.isTrusted) return;
   const raw = e.composedPath ? e.composedPath()[0] : e.target;
   const el = raw && raw.nodeType === 1 ? raw : e.target;
   if (mode === 'record') {
     if (isTextInput(el) || el.tagName === 'SELECT' || el.tagName === 'OPTION') return;
+    // clicking a file field only opens the system dialog; the chosen file is recorded as an upload step
+    if (isFileField(el) || (el.closest('label') && isFileField(el.closest('label').control))) return;
     flushPending();
+    const toggle = toggleControl(el);
+    if (toggle) {
+      // checkbox / radio / switch: record the resulting state, not a blind click
+      const tgt = buildTarget(toggle.target);
+      setTimeout(() => emit({ type: 'check', target: tgt, value: isChecked(toggle.control) ? 'true' : 'false' }), 60);
+      return;
+    }
     const t = el.closest(CLICKABLE) || el;
-    emit({ type: 'click', target: buildTarget(t) });
+    emit({ type: 'click', target: buildTarget(t), in_list: listContext(t) || undefined });
     return;
   }
   if (mode.startsWith('pick-')) {
@@ -436,9 +595,16 @@ function onInput(e) {
   if (!pending) pending = { el, target: buildTarget(el) };
 }
 
+function isFileField(el) { return !!el && el.tagName === 'INPUT' && (el.type || '').toLowerCase() === 'file'; }
+
 function onChange(e) {
   if (mode !== 'record' || !e.isTrusted) return;
   const el = e.target;
+  if (isFileField(el)) {
+    const names = Array.from(el.files || []).map((f) => f.name);
+    if (names.length) emit({ type: 'upload', target: buildTarget(el), value: names.join('; '), sample: names.join('; ') });
+    return;
+  }
   if (el.tagName === 'SELECT') {
     const opt = el.selectedOptions[0];
     emit({ type: 'select', target: buildTarget(el), value: el.value, label: opt ? clean(opt.text) : undefined });
@@ -518,6 +684,38 @@ const commands = {
     const val = el.isContentEditable ? el.innerText : el.value;
     return { found: true, hasValue: !!val };
   },
+  detectCaptcha() {
+    const probes = [
+      ['reCAPTCHA', 'iframe[src*="recaptcha"], .g-recaptcha'],
+      ['hCaptcha', 'iframe[src*="hcaptcha"], .h-captcha'],
+      ['Cloudflare', 'iframe[src*="challenges.cloudflare.com"], .cf-turnstile, #challenge-form'],
+      ['captcha', '[id*="captcha" i], [class*="captcha" i], img[src*="captcha" i], input[name*="captcha" i]'],
+    ];
+    for (const [kind, sel] of probes) {
+      try { if (Array.from(document.querySelectorAll(sel)).some(isVisible)) return { found: true, kind }; } catch {}
+    }
+    if (/^(just a moment|attention required|verify you are human)/i.test(document.title)) return { found: true, kind: 'Cloudflare' };
+    return { found: false };
+  },
+  markElement({ target, scope, token }) {
+    // file fields are often hidden behind a styled "Choose file" button
+    const el = findElement(target, scope, { allowHidden: true });
+    if (!el) return { found: false };
+    el.setAttribute('data-ab-file', token);
+    return { found: true, tag: el.tagName.toLowerCase(), type: (el.getAttribute('type') || '').toLowerCase() };
+  },
+  unmarkElement({ token }) {
+    const el = document.querySelector(`[data-ab-file="${token}"]`);
+    if (el) el.removeAttribute('data-ab-file');
+    return true;
+  },
+  checkState({ target, scope }) {
+    const el = findElement(target, scope);
+    if (!el) return { found: false };
+    const t = toggleControl(el) || { control: el.querySelector && el.querySelector('input[type=checkbox],input[type=radio],[role=checkbox],[role=switch]') };
+    if (!t.control) return { found: true, checked: null };
+    return { found: true, checked: isChecked(t.control), disabled: !!t.control.disabled, radio: t.control.type === 'radio' || t.control.getAttribute('role') === 'radio' };
+  },
   setSelect({ target, scope, value, label }) {
     const el = findElement(target, scope);
     if (!el || el.tagName !== 'SELECT') return { ok: false };
@@ -571,25 +769,28 @@ const commands = {
       totp: otp ? buildTarget(otp) : null,
     };
   },
-  snapshot() {
+  snapshot({ privateMode = false } = {}) {
     snapshotEls = interactive().slice(0, 400);
+    const txt = (el, n) => (privateMode && !isUiText(el) ? maskText(el.innerText, n) : short(el.innerText, n)) || undefined;
     return {
-      url: location.href,
-      title: document.title,
+      url: privateMode ? maskUrl(location.href) : location.href,
+      title: privateMode ? maskText(document.title, 60) : document.title,
       elements: snapshotEls.map((el, index) => ({
         index,
         tag: el.tagName.toLowerCase(),
-        text: short(el.innerText, 100) || undefined,
+        text: txt(el, 100),
         role: el.getAttribute('role') || undefined,
         label: labelOf(el) || undefined,
         placeholder: el.getAttribute('placeholder') || undefined,
-        href: el.tagName === 'A' ? short(el.getAttribute('href'), 120) : undefined,
+        href: el.tagName === 'A' ? (privateMode ? maskUrl(el.getAttribute('href')) : short(el.getAttribute('href'), 120)) : undefined,
         type: el.getAttribute('type') || undefined,
-        value: el.type === 'password' ? undefined : (short(el.value, 60) || undefined),
+        value: el.type === 'password' ? undefined : ((privateMode ? maskText(el.value) : short(el.value, 60)) || undefined),
       })),
-      text_excerpt: short(document.body ? document.body.innerText : '', 6000),
+      // private mode: the page's code outline instead of its visible text
+      text_excerpt: privateMode ? pageOutline({ privateMode: true, maxLines: 250 }) : short(document.body ? document.body.innerText : '', 6000),
     };
   },
+  outline({ privateMode = true } = {}) { return pageOutline({ privateMode }); },
   async rectOfIndex({ index }) {
     const el = snapshotEls[index];
     if (!el || !el.isConnected) return { found: false };

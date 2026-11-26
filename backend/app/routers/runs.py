@@ -40,8 +40,8 @@ def get_run(rid: str):
 def create_run(body: RunIn):
     rid = db.new_id()
     with db.tx() as c:
-        c.execute("INSERT INTO runs(id,flow_id,profile_id,mode,started) VALUES(?,?,?,?,?)",
-                  (rid, body.flow_id, body.profile_id, body.mode, db.now()))
+        c.execute("INSERT INTO runs(id,flow_id,profile_id,mode,dataset_id,started) VALUES(?,?,?,?,?,?)",
+                  (rid, body.flow_id, body.profile_id, body.mode, body.dataset_id, db.now()))
     return _run(rid)
 
 
@@ -89,3 +89,77 @@ def run_csv(rid: str, name: str | None = None):
         w.writerow({k: (json.dumps(v) if isinstance(v, (dict, list)) else v) for k, v in r.items()})
     return Response(buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="run-{rid}.csv"'})
+
+
+@router.get("/runs/{rid}/results.xlsx")
+def run_xlsx(rid: str):
+    """Row-by-row results (your data + _status / _message / extracted values), plus one sheet per extracted table."""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill
+
+    run = _run(rid)
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    groups: dict[str, list[dict]] = {}
+    for item in run["output"]:
+        data = item.get("data")
+        rows = data if isinstance(data, list) else [data] if isinstance(data, dict) else [{"value": data}]
+        groups.setdefault(item.get("name") or "data", []).extend(r if isinstance(r, dict) else {"value": r} for r in rows)
+    if not groups:
+        groups["results"] = []
+    fills = {"success": "D9F2E3", "failed": "F9D6D9", "skipped": "FFF1CC"}
+    for name, rows in groups.items():
+        ws = wb.create_sheet(("Rows" if name == "_rows" else name)[:31])
+        cols: list[str] = []
+        for r in rows:
+            for k in r:
+                if k not in cols and not isinstance(r[k], dict):
+                    cols.append(k)
+        if name == "_rows":  # status columns first
+            cols = [c for c in ("_row", "_status", "_message") if c in cols] + [c for c in cols if c not in ("_row", "_status", "_message")]
+        ws.append(cols or ["value"])
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+        for r in rows:
+            ws.append([json.dumps(r.get(c)) if isinstance(r.get(c), list) else r.get(c) for c in cols])
+            st = r.get("_status")
+            if st in fills:
+                for cell in ws[ws.max_row]:
+                    cell.fill = PatternFill("solid", fgColor=fills[st])
+        for i, c in enumerate(cols, 1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = min(45, max(10, len(c) + 2))
+    buf = io.BytesIO()
+    wb.save(buf)
+    return Response(buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="run-{rid}.xlsx"'})
+
+
+@router.get("/runs/{rid}/updated-file")
+def run_updated_file(rid: str):
+    """Your original Excel / CSV with 'AutoBrowser status', 'AutoBrowser message' and extracted values added."""
+    from .. import writeback
+    run = _run(rid)
+    if not run.get("dataset_id"):
+        raise HTTPException(400, "This run did not use a data file")
+    results = writeback.row_results(run)
+    try:
+        name, content, mime = writeback.updated_file(run["dataset_id"], results)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    from urllib.parse import quote
+    return Response(content, media_type=mime, headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}", "X-Filename": quote(name)})
+
+
+@router.post("/runs/{rid}/apply-to-data")
+def run_apply_to_data(rid: str):
+    """Copy the run's per-row status / values into the data source (used by 'skip rows already done')."""
+    from .. import writeback
+    run = _run(rid)
+    if not run.get("dataset_id"):
+        raise HTTPException(400, "This run did not use a data file")
+    results = writeback.row_results(run)
+    try:
+        d = writeback.apply_to_dataset(run["dataset_id"], results)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True, "rows_updated": len(results), "columns": d["columns"]}

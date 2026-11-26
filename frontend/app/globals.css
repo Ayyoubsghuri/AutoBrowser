@@ -100,17 +100,18 @@ button { cursor: pointer; }
 .logo::after { content: ''; width: 14px; height: 14px; border-radius: 50%; background: var(--glass-strong); }
 
 .tabsbar { grid-row: 1; grid-column: 2 / 4; display: flex; align-items: center; gap: 6px; padding-right: 150px; min-width: 0; }
-.tab { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 8px 0 12px; min-width: 120px; max-width: 220px;
+.tab { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 6px 0 12px; min-width: 120px; max-width: 220px;
   border-radius: var(--pill); background: transparent; border: 1px solid transparent; color: var(--ink-2); font-size: 13px; }
 .tab:hover { background: var(--glass); }
 .tab.active { background: var(--glass-strong); border-color: var(--stroke); color: var(--ink); box-shadow: 0 4px 16px rgba(30, 50, 60, .1); }
 .tab .t { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; }
-.tab .x { opacity: 0; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; border: 0; background: transparent; }
+.tab .x { opacity: 0; width: 22px; height: 22px; flex: none; padding: 0; margin: 0; border-radius: 50%; display: grid; place-items: center; border: 0; background: transparent; color: inherit; line-height: 0; }
+.tab .x svg { display: block; }
 .tab:hover .x, .tab.active .x { opacity: .7; }
-.tab .x:hover { background: var(--hair); opacity: 1; }
+.tab .x:hover { background: color-mix(in srgb, var(--ink) 14%, transparent); opacity: 1; }
 .tab .fav { width: 16px; height: 16px; border-radius: 4px; flex: none; }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-.iconbtn { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; border: 0; background: transparent; color: var(--ink-2); flex: none; }
+.iconbtn { width: 34px; height: 34px; padding: 0; line-height: 0; border-radius: 50%; display: grid; place-items: center; border: 0; background: transparent; color: var(--ink-2); flex: none; }
 .iconbtn:hover:not(:disabled) { background: var(--glass-hover); color: var(--ink); }
 .iconbtn:disabled { opacity: .35; cursor: default; }
 .iconbtn.on { background: var(--accent); color: var(--accent-ink); }
@@ -133,7 +134,7 @@ button { cursor: pointer; }
 /* ------------------------------------------------------------ rail */
 .rail { grid-row: 3; grid-column: 1; display: flex; flex-direction: column; align-items: center; gap: 12px; min-height: 0; }
 .railgroup { display: flex; flex-direction: column; gap: 4px; padding: 6px; border-radius: 30px; }
-.railbtn { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; border: 0; background: transparent; color: var(--ink-2); position: relative; }
+.railbtn { width: 44px; height: 44px; padding: 0; line-height: 0; border-radius: 50%; display: grid; place-items: center; border: 0; background: transparent; color: var(--ink-2); position: relative; }
 .railbtn:hover { background: var(--glass-hover); color: var(--ink); }
 .railbtn.active { background: var(--glass-strong); color: var(--accent); box-shadow: 0 4px 14px rgba(30, 50, 60, .12); }
 .railbtn.rec.active { color: var(--rec); }
@@ -249,3 +250,7 @@ button { cursor: pointer; }
 @media (max-width: 1100px) {
   .panel { width: 340px; }
 }
+
+.pausebar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 16px; flex: none;
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent); }
+.pagewrap > .pausebar ~ .pageframe, .pagewrap > .pausebar ~ .start { position: relative; inset: auto; flex: 1; min-height: 0; }

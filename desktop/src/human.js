@@ -6,6 +6,8 @@ const rand = (a, b) => a + Math.random() * (b - a);
 const gauss = () => (Math.random() + Math.random() + Math.random()) / 3; // ~normal in [0,1]
 
 const lastPos = new WeakMap();
+const flush = (wc) => (wc.flushInput ? wc.flushInput() : undefined);
+const gone = (wc) => typeof wc.isDestroyed === 'function' && wc.isDestroyed();
 
 class Human {
   constructor(getSpeed = () => 1) {
@@ -45,9 +47,10 @@ class Human {
     for (let n = 1; n <= clickCount; n++) {
       wc.sendInputEvent({ type: 'mouseDown', x, y, button, clickCount: n });
       await sleep(rand(45, 120) * this.getSpeed());
-      wc.sendInputEvent({ type: 'mouseUp', x, y, button, clickCount: n });
+      if (!gone(wc)) wc.sendInputEvent({ type: 'mouseUp', x, y, button, clickCount: n });
       if (n < clickCount) await sleep(rand(60, 110));
     }
+    if (!gone(wc)) await flush(wc);
   }
 
   async key(wc, keyCode, modifiers = []) {
@@ -59,6 +62,7 @@ class Human {
     }
     await sleep(rand(30, 90) * this.getSpeed());
     wc.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
+    await flush(wc);
   }
 
   async selectAllAndDelete(wc) {
@@ -90,6 +94,7 @@ class Human {
       wc.sendInputEvent({ type: 'mouseWheel', x: at.x, y: at.y, deltaX: 0, deltaY: dy > 0 ? -100 : 100, canScroll: true });
       await sleep(rand(30, 90) * this.getSpeed());
     }
+    await flush(wc);
   }
 }
 

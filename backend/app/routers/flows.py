@@ -4,7 +4,7 @@ import anthropic
 import openai
 from fastapi import APIRouter, HTTPException
 
-from .. import ai, db
+from .. import ai, data_rows, db
 from ..schemas import CompileIn, FlowIn, FlowPatch
 
 router = APIRouter(tags=["flows"])
@@ -33,9 +33,10 @@ def create_flow(body: FlowIn):
     fid = db.new_id()
     t = db.now()
     with db.tx() as c:
-        c.execute("INSERT INTO flows(id,name,start_url,description,steps,compiled,created,updated) VALUES(?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO flows(id,name,start_url,description,steps,compiled,data,created,updated) VALUES(?,?,?,?,?,?,?,?,?)",
                   (fid, body.name, body.start_url, body.description, db.dumps(body.steps),
-                   db.dumps(body.compiled) if body.compiled else None, t, t))
+                   db.dumps(body.compiled) if body.compiled else None,
+                   db.dumps(body.data.model_dump()) if body.data else None, t, t))
     return _flow(fid)
 
 
@@ -43,7 +44,7 @@ def create_flow(body: FlowIn):
 def patch_flow(fid: str, body: FlowPatch):
     _flow(fid)
     f = body.model_dump(exclude_unset=True)
-    for k in ("steps", "compiled"):
+    for k in ("steps", "compiled", "data"):
         if k in f and f[k] is not None:
             f[k] = db.dumps(f[k])
     f["updated"] = db.now()
@@ -86,3 +87,28 @@ def compile_flow(fid: str, body: CompileIn | None = None):
     with db.tx() as c:
         c.execute("UPDATE flows SET compiled=?, updated=? WHERE id=?", (db.dumps(compiled), db.now(), fid))
     return _flow(fid)
+
+
+@router.post("/flows/{fid}/ai-preview")
+def ai_preview(fid: str, body: CompileIn | None = None):
+    """Exactly what 'Build with AI' would send, without sending it."""
+    flow = _flow(fid)
+    body = body or CompileIn()
+    system, text = ai.build_compile_prompt(flow, goal=(body.goal or "").strip() or None, output_kind=body.output_kind,
+                                           output_fields=body.output_fields, feedback=(body.feedback or "").strip() or None)
+    from .. import settings_store
+    return {"private": settings_store.get_privacy(), "text": text, "chars": len(text)}
+
+
+@router.get("/flows/{fid}/data-rows")
+def flow_data_rows(fid: str, limit: int | None = None, rows: str | None = None):
+    """The rows this flow will loop over: main data + joined files, filtered."""
+    flow = _flow(fid)
+    if not flow.get("data"):
+        return {"columns": [], "rows": [], "total": 0}
+    try:
+        only = [int(x) for x in rows.split(",") if x.strip().isdigit()] if rows else None
+        columns, picked, total = data_rows.resolve(flow["data"], only)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    return {"columns": columns, "rows": picked[:limit] if limit else picked, "total": total}

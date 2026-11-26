@@ -38,6 +38,6 @@ jobs:
 
             The executables are not code-signed yet, so Windows SmartScreen may warn on first launch: click **More info → Run anyway**.
 
-            Exact replays need nothing else. For "Build with AI", AI steps and AI assist, add an Anthropic API key in Settings.
+            Exact replays need nothing else. For "Build with AI", AI steps and AI assist, add a Claude, OpenAI or NVIDIA API key (or a local model) in Settings. Private mode (on by default) lets the AI read page code but never page data.
           files: |
             desktop/release/*.exe

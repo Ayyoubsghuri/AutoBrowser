@@ -16,17 +16,23 @@ export interface Bridge {
     forward(id?: number): Promise<void>;
     reload(id?: number): Promise<void>;
     setProfile(id: number | null, profileId: string | null): Promise<TabInfo>;
+    showFirefox(id?: number | null): Promise<void>;
   };
+  engine: { status(): Promise<{ firefoxInstalled: boolean; defaultEngine: string }>; installFirefox(): Promise<boolean> };
   setPageBounds(rect: { x: number; y: number; width: number; height: number } | null): Promise<void>;
+  previewTemplate(str: string, vars: Record<string, unknown>): Promise<{ text?: string; error?: string }>;
   profiles: { refresh(): Promise<void>; clearData(profileId: string | null): Promise<boolean> };
   settings: { refresh(): Promise<void> };
   recorder: { start(tabId?: number | null): Promise<void>; stop(): Promise<void>; setMode(mode: string): Promise<void> };
   runner: {
-    run(o: { flow: unknown; profileIds: (string | null)[]; mode: RunMode; parallel?: boolean }): Promise<{ runId: string; status: string }[]>;
+    run(o: { flow: unknown; profileIds: (string | null)[]; mode: RunMode; parallel?: boolean; rows?: number[] }): Promise<{ runId: string; status: string }[]>;
     stop(runId?: string): Promise<void>;
+    resume(runId: string, action: 'continue' | 'skip' | 'stop'): Promise<boolean>;
   };
   openExternal(url: string): Promise<void>;
-  saveFile(o: { name: string; content: string }): Promise<string | null>;
+  saveFile(o: { name: string; content: string; base64?: boolean; defaultPath?: string | null }): Promise<string | null>;
+  pickFiles(o?: { multiple?: boolean }): Promise<string[]>;
+  pathForFile?(file: File): string | null;
   on(channel: string, cb: (payload: any) => void): Unsub;
 }
 
@@ -57,8 +63,11 @@ function mockBridge(): Bridge {
       navigate: async (id, input) => { tabs = tabs.map((t) => (t.id === (id ?? active) ? { ...t, url: input, title: input } : t)); push(); },
       back: noop, forward: noop, reload: noop,
       setProfile: async (id, profileId) => { tabs = tabs.map((t) => (t.id === (id ?? active) ? { ...t, profileId } : t)); push(); return tabs[0]; },
+      showFirefox: noop,
     },
+    engine: { status: async () => ({ firefoxInstalled: false, defaultEngine: 'chromium' }), installFirefox: async () => false },
     setPageBounds: noop,
+    previewTemplate: async (str) => ({ text: str }),
     profiles: { refresh: noop, clearData: async () => true },
     settings: { refresh: noop },
     recorder: {
@@ -66,11 +75,13 @@ function mockBridge(): Bridge {
       stop: async () => fire('rec:state', { recording: false }),
       setMode: async (mode) => fire('rec:state', { recording: true, mode }),
     },
-    runner: { run: async () => [], stop: noop },
+    runner: { run: async () => [], stop: noop, resume: async () => false },
     openExternal: async (u) => { window.open(u, '_blank'); },
-    saveFile: async ({ name, content }) => {
+    pickFiles: async () => [],
+    saveFile: async ({ name, content, base64 }) => {
       const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([content]));
+      const data = base64 ? Uint8Array.from(atob(content), (c) => c.charCodeAt(0)) : content;
+      a.href = URL.createObjectURL(new Blob([data]));
       a.download = name; a.click(); return name;
     },
     on(ch, cb) {

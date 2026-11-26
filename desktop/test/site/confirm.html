@@ -1,0 +1,11 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Demo Bank – Confirm payment</title>
+<style>body{font-family:system-ui;padding:30px}button{padding:10px 16px;border-radius:8px;border:0;background:#0f766e;color:#fff}</style></head>
+<body><h2 id="what"></h2><button id="confirm">Confirm payment</button>
+<script>
+const order = new URLSearchParams(location.search).get('order');
+document.getElementById('what').textContent = 'Payment for order ' + order;
+document.getElementById('confirm').addEventListener('click', () => {
+  if (window.opener) window.opener.postMessage('paid:' + order, '*');
+  setTimeout(() => window.close(), 200);
+});
+</script></body></html>

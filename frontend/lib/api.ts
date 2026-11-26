@@ -21,6 +21,43 @@ export async function api<T = any>(method: string, path: string, body?: unknown)
   return data as T;
 }
 
+/** Binary download (e.g. .xlsx) as base64, for saving through the desktop bridge. */
+export async function getBase64(path: string): Promise<string> {
+  const { url, token } = await conn();
+  const res = await fetch(url + path, { headers: { 'x-autobrowser-token': token } });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+/** Binary download plus the file name the server suggests (X-Filename). */
+export async function getFile(path: string): Promise<{ b64: string; name: string | null }> {
+  const { url, token } = await conn();
+  const res = await fetch(url + path, { headers: { 'x-autobrowser-token': token } });
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`;
+    try { msg = (await res.json()).detail || msg; } catch {}
+    throw new Error(msg);
+  }
+  const name = res.headers.get('x-filename');
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return { b64: btoa(bin), name: name ? decodeURIComponent(name) : null };
+}
+
+/** Read a local file picked by the user as base64 (for uploads). */
+export function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',', 2)[1] || '');
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+}
+
 export const get = <T = any>(p: string) => api<T>('GET', p);
 export const post = <T = any>(p: string, b?: unknown) => api<T>('POST', p, b ?? {});
 export const patch = <T = any>(p: string, b: unknown) => api<T>('PATCH', p, b);
