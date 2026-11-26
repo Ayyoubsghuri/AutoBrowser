@@ -255,7 +255,7 @@ function createChromiumTab({ url, profileId = null, activate = true, popupOption
   if (view.setBorderRadius) view.setBorderRadius(14);
   view.setBackgroundColor('#ffffff');
   const id = nextTabId++;
-  const tab = { id, view, profileId, partition, title: 'New tab', url: '', favicon: null, loading: false, openerId };
+  const tab = { id, view, wc: view.webContents, profileId, partition, title: 'New tab', url: '', favicon: null, loading: false, openerId };
   tabs.set(id, tab);
   win.contentView.addChildView(view);
   const wc = view.webContents;
@@ -339,10 +339,11 @@ function closeTab(id, { fromPage = false } = {}) {
       sendUI('rec:state', { recording: true, tabId: t.openerId, mode: recording.mode });
     } else stopRecording();
   }
-  if (runner) runner.onTabClosed(t.view.webContents);
+  const wc = t.wc || t.view.webContents;
+  if (runner) runner.onTabClosed(wc);
   tabs.delete(id);
-  if (!t.view.external) win.contentView.removeChildView(t.view);
-  if (!fromPage) { try { t.view.webContents.close(); } catch {} }
+  if (!t.view.external) { try { win.contentView.removeChildView(t.view); } catch {} }
+  if (!fromPage) { try { wc.close(); } catch {} }
   if (t.openerId && tabs.has(t.openerId) && activeTabId === id) activeTabId = t.openerId;
   if (activeTabId === id) {
     const rest = [...tabs.keys()];

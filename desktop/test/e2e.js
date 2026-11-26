@@ -505,7 +505,7 @@ function screen(name) {
     await shop.click('#pay');
     const bank = await tabPage(/confirm\.html/);
     await bank.waitForSelector('#what:not(:empty)');
-    check(await ui.isVisible('.tab.active:has-text("Confirm payment")'), 'pop-up window opened as a tab and became active');
+    check(!!(await ui.waitForSelector('.tab.active:has-text("Confirm payment")', { timeout: 8000 }).catch(() => null)), 'pop-up window opened as a tab and became active');
     await sleep(500);
     await bank.click('#confirm');
     await shop.waitForSelector('#status:text("Paid 7")', { timeout: 10000 });

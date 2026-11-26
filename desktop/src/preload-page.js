@@ -225,7 +225,7 @@ function resolveScope(scope) {
   return rows[scope.index] || null;
 }
 
-function findElement(target, scope) {
+function findElement(target, scope, { allowHidden = false } = {}) {
   const root = resolveScope(scope);
   if (!root || !target) return null;
   for (const cand of target.selectors || []) {
@@ -243,7 +243,7 @@ function findElement(target, scope) {
     const found = queryCandidate(c, r);
     const vis = found.filter(isVisible);
     if (vis.length) return vis[0];
-    if (found.length && target.tag === 'input') return found[0];
+    if (found.length && (allowHidden || target.tag === 'input')) return found[0];
   }
   return null;
 }
@@ -698,7 +698,8 @@ const commands = {
     return { found: false };
   },
   markElement({ target, scope, token }) {
-    const el = findElement(target, scope);
+    // file fields are often hidden behind a styled "Choose file" button
+    const el = findElement(target, scope, { allowHidden: true });
     if (!el) return { found: false };
     el.setAttribute('data-ab-file', token);
     return { found: true, tag: el.tagName.toLowerCase(), type: (el.getAttribute('type') || '').toLowerCase() };
