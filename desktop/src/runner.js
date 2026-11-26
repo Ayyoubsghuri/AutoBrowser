@@ -201,6 +201,7 @@ class Runner {
       progress(i);
       ctx.vars.row = row;
       ctx.vars.index = i;
+      ctx.vars.vars = {}; // fresh lists for every data row
       ctx.rowResult = {};
       let status = 'success';
       let message = '';
@@ -450,7 +451,8 @@ class Runner {
         if (!rows) throw new Error('table not found');
         ctx.log('info', `Extracted ${rows.length} rows → ${step.name || 'table'}`, step.id);
         ctx.output(step.name || 'table', rows);
-        ctx.vars.vars[step.name || 'table'] = rows;
+        const key = step.name || 'table';
+        ctx.vars.vars[key] = (ctx.vars.vars[key] || []).concat(rows); // keeps growing across pages of a pagination loop
         return;
       }
 
@@ -459,7 +461,8 @@ class Runner {
         if (!box) throw new Error('element not found');
         const text = await frameCall(box.frame, 'extractText', { target: step.target, scope: ctx.scope });
         ctx.log('info', `Extracted ${step.name || 'text'}: ${String(text).slice(0, 80)}`, step.id);
-        if (ctx.rowResult) ctx.rowResult[step.name || 'text'] = text; // per-row result column
+        if (ctx.itemResult) ctx.itemResult[step.name || 'text'] = text; // per-item result column
+        else if (ctx.rowResult) ctx.rowResult[step.name || 'text'] = text; // per-row result column
         else ctx.output(step.name || 'text', ctx.scope ? { ...(ctx.vars.row || {}), [step.name || 'text']: text } : text);
         ctx.vars.vars[step.name || 'text'] = text;
         return;
@@ -558,12 +561,79 @@ class Runner {
       }
       return;
     }
+    if (cfg.over === 'items') return this.loopItems(ctx, step);
     if (cfg.over === 'list' && Array.isArray(cfg.items)) {
       for (const item of cfg.items.slice(0, max)) { ctx.vars.item = item; await this.execSteps(ctx, children); }
       return;
     }
     const times = Math.min(cfg.count || 1, max);
     for (let i = 0; i < times; i++) { ctx.vars.index = i; await this.execSteps(ctx, children); }
+  }
+
+  // "For each item": open every item of a list (by its link, or by clicking its row on the
+  // list page) and run the child steps there. Values extracted on each item page are
+  // merged with that item's list data into one result table.
+  async loopItems(ctx, step) {
+    const cfg = step.loop || {};
+    const children = step.steps || [];
+    const frame = () => ctx.wc.mainFrame;
+    let items = cfg.from ? ctx.vars.vars[cfg.from] : null;
+    let mode = cfg.open || 'link';
+    if (mode === 'link' && !(Array.isArray(items) && items.some((it) => it && it._link))) mode = 'click';
+    let count = Array.isArray(items) ? items.length : 0;
+    if (mode === 'click') {
+      if (!cfg.list_url || !cfg.row_selector) throw new Error('This loop does not know the list page; record it again');
+      await this.goto(ctx, cfg.list_url);
+      count = await frameCall(frame(), 'rowCount', { selector: cfg.row_selector });
+    }
+    count = Math.min(count, cfg.max || 500);
+    if (!count) throw new Error(cfg.from ? `No items in "${cfg.from}": the list was empty or not extracted` : 'The list is empty');
+    const outName = step.name || `${cfg.from || 'items'}_details`;
+    const clickTarget = cfg.click_target || { selectors: [{ kind: 'css', value: '{{row}} a[href]' }, { kind: 'css', value: '{{row}}' }] };
+    ctx.log('info', `For each of ${count} items (${mode === 'link' ? 'opening each link' : 'clicking each row'})`, step.id);
+    let ok = 0;
+    let failed = 0;
+    for (let i = 0; i < count; i++) {
+      this.checkStop(ctx);
+      let item = Array.isArray(items) ? items[i] || {} : null;
+      const outerItem = ctx.vars.item;
+      ctx.itemResult = {};
+      let status = 'success';
+      let message = '';
+      try {
+        if (mode === 'link') {
+          await this.goto(ctx, item._link);
+        } else {
+          if (i > 0 || ctx.wc.getURL() !== cfg.list_url) await this.goto(ctx, cfg.list_url);
+          if (!item) item = (await frameCall(frame(), 'rowData', { selector: cfg.row_selector, index: i })) || {};
+          const outerScope = ctx.scope;
+          ctx.scope = { selector: cfg.row_selector, index: i };
+          const box = await this.locate(ctx, { target: clickTarget }, { timeout: 8000 });
+          ctx.scope = outerScope;
+          if (!box) throw new Error(`could not open item ${i + 1}`);
+          await this.clickBox(ctx, box);
+        }
+        ctx.vars.item = item;
+        ctx.vars.index = i;
+        ctx.log('info', `Item ${i + 1}/${count}`, step.id);
+        await this.execSteps(ctx, children);
+        ok++;
+      } catch (e) {
+        status = e instanceof StopError ? 'stopped' : 'failed';
+        message = e.message || String(e);
+        if (status === 'failed') { failed++; ctx.log('warn', `Item ${i + 1} failed: ${message}`, step.id); }
+        if (e instanceof StopError) {
+          ctx.output(outName, [{ ...flattenRow(item || {}), ...ctx.itemResult, _status: status, _message: message }]);
+          ctx.itemResult = null;
+          throw e;
+        }
+      }
+      ctx.output(outName, [{ _item: i + 1, ...flattenRow(item || {}), ...ctx.itemResult, _status: status, _message: message }]);
+      ctx.itemResult = null;
+      ctx.vars.item = outerItem;
+    }
+    ctx.log(failed ? 'warn' : 'info', `Items done: ${ok} succeeded, ${failed} failed → "${outName}"`, step.id);
+    if (failed && !ok) throw new Error('Every item failed');
   }
 
   async aiStep(ctx, step) {

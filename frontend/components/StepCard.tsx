@@ -22,10 +22,11 @@ function ColumnPicker({ columns, onPick }: { columns: string[]; onPick: (tpl: st
   );
 }
 
-export function StepCard({ step, index, onChange, onRemove, onMove, readOnly = false, columns = [], rowStart = false, onSetRowStart }: {
+export function StepCard({ step, index, onChange, onRemove, onMove, readOnly = false, columns = [], rowStart = false, onSetRowStart, onRepeatForItems, onUndoRepeat }: {
   step: Step; index: number;
   onChange?: (s: Step) => void; onRemove?: () => void; onMove?: (dir: -1 | 1) => void; readOnly?: boolean;
   columns?: string[]; rowStart?: boolean; onSetRowStart?: () => void;
+  onRepeatForItems?: () => void; onUndoRepeat?: () => void;
 }) {
   const Icon = ICONS[step.type] || List;
   const set = (patch: Partial<Step>) => onChange?.({ ...step, ...patch });
@@ -117,9 +118,27 @@ export function StepCard({ step, index, onChange, onRemove, onMove, readOnly = f
         </div>
       )}
 
+      {!readOnly && onRepeatForItems && step.type === 'click' && step.in_list && (
+        <button className="btn sm" style={{ justifyContent: 'flex-start', height: 'auto', padding: '6px 10px', whiteSpace: 'normal', textAlign: 'left' }} onClick={onRepeatForItems}
+          title="The steps after this click run for every item of the list">
+          <Repeat size={13} style={{ flex: 'none' }} /> This click opened item {step.in_list.index + 1} of {step.in_list.count} in a list. Repeat the next steps for every item
+        </button>
+      )}
+      {step.type === 'loop' && step.loop?.over === 'items' && (
+        <div className="small muted">
+          Opens each item {step.loop.open === 'link' ? 'by its link' : 'by clicking its row on the list page'} and runs the steps below there.
+          Results go to <b>{step.name}</b>{step.loop.from ? <> with the columns of <b>{step.loop.from}</b></> : null}.
+          {!readOnly && onUndoRepeat && <> <button className="btn sm" style={{ height: 22 }} onClick={onUndoRepeat}>Undo</button></>}
+        </div>
+      )}
       {step.steps && step.steps.length > 0 && (
         <div className="children">
-          {step.steps.map((c, i) => <StepCard key={c.id || i} step={c} index={i} readOnly />)}
+          {step.steps.map((c, i) => (
+            <StepCard key={c.id || i} step={c} index={i} readOnly={readOnly} columns={columns}
+              onChange={(n) => set({ steps: step.steps!.map((x, j) => (j === i ? n : x)) })}
+              onRemove={() => set({ steps: step.steps!.filter((_, j) => j !== i) })}
+              onMove={(d) => { const a = step.steps!.slice(); const j = i + d; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; set({ steps: a }); }} />
+          ))}
         </div>
       )}
     </div>

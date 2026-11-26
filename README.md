@@ -45,6 +45,18 @@ Replay it exactly with no AI, or let Claude turn it into a smarter automation
 
 Results (tables, text) are listed under **Runs** and can be exported as CSV or JSON.
 
+### Getting details from every item of a list (record one, get all)
+The price, stock or anything else is often only on each item's own page. Record it **once**:
+
+1. On the list page, **Pick table** on any item. That captures every item and its link.
+2. Click **one** item to open it, then **Pick text** on what you want (name the step, e.g. `price`).
+3. Stop, then on the click step press **"Repeat the next steps for every item"**.
+
+AutoBrowser opens every item: by its link, or by clicking its row on the list page when there is no link.
+It runs your steps there and returns one table (`products_details`) with each item's list columns plus the values
+you picked. Items that fail get `_status: failed` and the run carries on. **Undo** on the loop turns it back into the
+original steps. "Build with AI" can also produce this loop from a goal like *"price of every product, all pages"*.
+
 ### Filling websites from Excel, CSV or PDFs
 1. **Data** (spreadsheet icon) → **Import** an `.xlsx`, `.xls` or `.csv` (pick the sheet and header row), or several **PDFs**:
    each PDF becomes one row. Fields come from fillable PDF form fields, or from rules you set: *after label*

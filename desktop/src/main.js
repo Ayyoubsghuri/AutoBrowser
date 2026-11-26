@@ -400,6 +400,7 @@ handle('tabs:reload', (id) => { const t = tabs.get(id ?? activeTabId); if (t) t.
 handle('tabs:set-profile', async (id, profileId) => {
   // Profiles are isolated cookie jars; switching means reopening the URL in a new tab.
   const t = tabs.get(id ?? activeTabId);
+  if (t && (t.profileId || null) === (profileId || null)) return tabInfo(t); // nothing to change
   await refreshProfiles();
   const url = t ? t.view.webContents.getURL() : '';
   const nt = await createTab({ url: url === 'about:blank' ? '' : url, profileId });

@@ -336,6 +336,74 @@ function screen(name) {
     await ui.waitForSelector('text=data rows done');
     await sleep(300);
     screen('11-runs-data');
+
+    // ---------------------------------------------------- "for each item": price only on each product's own page
+    const recordItems = async (listUrl, clickSel, withTable) => {
+      await ui.fill('.address input', listUrl);
+      await ui.press('.address input', 'Enter');
+      const list = await tabPage(/products\.html/);
+      await list.waitForSelector('.card');
+      if (!(await ui.isVisible('.panel button[title="Clear"]'))) await ui.click('.railbtn[data-tip="Recorder"]');
+      ui.once('dialog', (d) => d.accept());
+      await ui.click('button[title="Clear"]');
+      await waitFor(async () => (await ui.evaluate(() => localStorage.getItem('ab.recorder.draft'))) === '[]', 'cleared');
+      await ui.selectOption('.panel select:has(option:text("No data: record a one-off flow"))', '');
+      await ui.click('.recbtn');
+      await ui.waitForSelector('.recbtn.live');
+      await sleep(300);
+      if (withTable) {
+        await ui.click('.tool:has-text("Pick table")');
+        await sleep(300);
+        await list.click('.card:nth-child(2) p');
+        await sleep(400);
+      }
+      await list.click(clickSel);
+      const prod = await tabPage(/product\.html\?id=/);
+      await prod.waitForSelector('#price:not(:empty)');
+      await sleep(600);
+      await ui.click('.tool:has-text("Pick text")');
+      await sleep(300);
+      await prod.click('#price');
+      await sleep(500);
+      await ui.click('.recbtn');
+      await sleep(300);
+      if (withTable) await ui.locator('.step', { hasText: 'Extract table' }).locator('input[placeholder^="Output name"]').fill('products');
+      await ui.locator('.step', { hasText: 'Extract text' }).locator('input[placeholder^="Output name"]').fill('price');
+      await ui.click('button:has-text("Repeat the next steps for every item")');
+      return JSON.parse(await ui.evaluate(() => localStorage.getItem('ab.recorder.draft')));
+    };
+
+    let isteps = await recordItems(`${base}/products.html`, '.card:nth-child(2) a', true);
+    console.log('  recorded:', isteps.map((s) => s.type + (s.type === 'loop' ? `[${(s.steps || []).map((c) => c.type).join(',')}]` : '')).join(' → '));
+    const loopStep = isteps.find((s) => s.type === 'loop');
+    check(loopStep && loopStep.loop.over === 'items' && loopStep.loop.from === 'products' && loopStep.loop.open === 'link', 'click inside the picked list became "for each item in products" (open by link)');
+    check(loopStep && loopStep.steps.length === 1 && loopStep.steps[0].type === 'extract_text' && loopStep.steps[0].name === 'price', 'steps done on the product page became the loop body');
+    screen('13-for-each-item');
+    await ui.fill('input[placeholder^="Flow name"]', 'Product prices');
+    await ui.click('footer button:has-text("Save")');
+    await ui.waitForSelector('text=Saved "Product prices"');
+    const pflow = (await call('GET', '/flows')).find((f) => f.name === 'Product prices');
+    const [pres] = await ui.evaluate((flow) => window.autobrowser.runner.run({ flow, profileIds: [null], mode: 'exact' }), pflow);
+    const prun = await call('GET', `/runs/${pres.runId}`);
+    if (pres.status !== 'success') console.log(prun.log.map((l) => `    ${l.level}: ${l.msg}`).join('\n'));
+    const details = prun.output.filter((o) => o.name === 'products_details').flatMap((o) => o.data);
+    console.log('  products_details:', JSON.stringify(details.map((d) => [d.col_1, d.price, d._status])));
+    check(pres.status === 'success' && details.length === 4, `opened all 4 products from one recording (${details.length})`);
+    check(details.map((d) => d.price).join() === '$12.50,$25.00,$37.50,$50.00' && details[2].col_1 === 'Bookshelf', 'each product price merged with its list row (name, SKU, link)');
+
+    // cards without links: open each by clicking its row on the list page
+    isteps = await recordItems(`${base}/products.html?js=1`, '.card:nth-child(3) .title', false);
+    const jsLoop = isteps.find((s) => s.type === 'loop');
+    check(jsLoop && jsLoop.loop.open === 'click' && /\.card/.test(jsLoop.loop.row_selector), 'list without links: loop opens each item by clicking its row');
+    await ui.fill('input[placeholder^="Flow name"]', 'Product prices JS');
+    await ui.click('footer button:has-text("Save")');
+    await ui.waitForSelector('text=Saved "Product prices JS"');
+    const jflow = (await call('GET', '/flows')).find((f) => f.name === 'Product prices JS');
+    const [jres] = await ui.evaluate((flow) => window.autobrowser.runner.run({ flow, profileIds: [null], mode: 'exact' }), jflow);
+    const jrun = await call('GET', `/runs/${jres.runId}`);
+    if (jres.status !== 'success') console.log(jrun.log.map((l) => `    ${l.level}: ${l.msg}`).join('\n'));
+    const jd = jrun.output.filter((o) => o.name === 'items_details').flatMap((o) => o.data);
+    check(jres.status === 'success' && jd.map((d) => d.price).join() === '$12.50,$25.00,$37.50,$50.00' && jd[3].col_1 === 'Monitor Arm', `clicked through all 4 JS-only items (${jd.length})`);
     await ui.click('.railbtn[data-tip="Accounts & logins"]');
     await sleep(400);
     screen('08-accounts');

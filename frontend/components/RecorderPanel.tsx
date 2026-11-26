@@ -5,7 +5,7 @@ import { Bot, Clock, Eraser, KeyRound, MousePointerClick, Sparkles, Table2, X, S
 import { bridge } from '@/lib/bridge';
 import { patch, post } from '@/lib/api';
 import type { Dataset, Flow, Step } from '@/lib/types';
-import { defaultRowStart, uid, usesRow } from '@/lib/steps';
+import { defaultRowStart, repeatForItems, undoRepeat, uid, usesRow } from '@/lib/steps';
 import { useDatasets } from './DataPanel';
 import { StepCard } from './StepCard';
 import { BuildWithAI } from './BuildWithAI';
@@ -165,7 +165,9 @@ export function RecorderPanel({ ctx, rec, steps, setSteps, editingFlow, setEditi
         ) : (
           steps.map((s, i) => (
             <StepCard key={s.id} step={s} index={i} onChange={(n) => update(i, n)} onRemove={() => remove(i)} onMove={(d) => move(i, d)}
-              columns={columns} rowStart={s.id === effectiveRowStart} onSetRowStart={effectiveRowStart ? () => setRowStartId(s.id) : undefined} />
+              columns={columns} rowStart={s.id === effectiveRowStart} onSetRowStart={effectiveRowStart ? () => setRowStartId(s.id) : undefined}
+              onRepeatForItems={s.in_list && i < steps.length - 1 ? () => setSteps((cur) => repeatForItems(cur, i)) : undefined}
+              onUndoRepeat={s.origin_click ? () => setSteps((cur) => undoRepeat(cur, i)) : undefined} />
           ))
         )}
       </div>

@@ -264,6 +264,43 @@ function findRepeatedContainer(el) {
   return null;
 }
 
+// Where a click happened inside a repeated list (table rows, product cards…), so the
+// recording can be turned into "do this for every item".
+function relPath(root, el) {
+  const parts = [];
+  for (let cur = el; cur && cur !== root; cur = cur.parentElement) {
+    let part = cur.tagName.toLowerCase();
+    const parent = cur.parentElement;
+    if (parent) {
+      const same = Array.from(parent.children).filter((c) => c.tagName === cur.tagName);
+      if (same.length > 1) part += `:nth-of-type(${same.indexOf(cur) + 1})`;
+    }
+    parts.unshift(part);
+  }
+  return parts.join(' > ');
+}
+function listContext(el) {
+  try {
+    const info = findRepeatedContainer(el);
+    if (!info) return null;
+    const rowSel = rowSelectorFor(info);
+    const rows = rowsOf(info.container, rowSel);
+    const row = rows.find((r) => r.contains(el));
+    if (!row || rows.length < 2) return null;
+    const base = cssPath(info.container);
+    const rowSelector = info.kind === 'table' ? `${base} ${rowSel}` : `${base} > ${rowSel.replace(/^:scope >\s*/, '')}`;
+    const a = el.closest('a[href]');
+    return {
+      row_selector: rowSelector,
+      index: rows.indexOf(row),
+      count: rows.length,
+      inner: relPath(row, el),
+      link: a && !/^(javascript:|#)/i.test(a.getAttribute('href') || '') ? a.href : null,
+      list_url: location.href,
+    };
+  } catch { return null; }
+}
+
 function rowSelectorFor(info) {
   if (info.kind === 'table') return info.container.tBodies.length ? 'tbody > tr' : 'tr';
   const [tag, cls] = info.rowSig.split('.');
@@ -508,7 +545,7 @@ function onClick(e) {
       return;
     }
     const t = el.closest(CLICKABLE) || el;
-    emit({ type: 'click', target: buildTarget(t) });
+    emit({ type: 'click', target: buildTarget(t), in_list: listContext(t) || undefined });
     return;
   }
   if (mode.startsWith('pick-')) {

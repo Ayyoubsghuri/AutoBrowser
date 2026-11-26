@@ -32,7 +32,15 @@ export type Step = {
   secret?: boolean;
   sample?: unknown;
   rowCount?: number;
-  loop?: { over: string; selector?: string; max?: number; count?: number };
+  loop?: {
+    over: string; selector?: string; max?: number; count?: number;
+    // over: 'items' -> open every item of a list
+    from?: string; open?: 'link' | 'click'; list_url?: string; row_selector?: string; click_target?: Target;
+  };
+  /** Set by the recorder when a click happened inside a repeated list (table rows, cards…). */
+  in_list?: { row_selector: string; index: number; count: number; inner: string; link: string | null; list_url: string };
+  /** The click a for-each-item loop replaced (to undo the conversion). */
+  origin_click?: Step;
   condition?: Record<string, unknown>;
   steps?: Step[];
   ts?: number;

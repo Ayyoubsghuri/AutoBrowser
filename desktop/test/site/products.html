@@ -1,0 +1,15 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Demo Store – Products</title>
+<style>body{font-family:system-ui;padding:30px;background:#f6f7fb}.grid{display:grid;grid-template-columns:repeat(2,240px);gap:14px}.card{background:#fff;border-radius:12px;padding:16px;cursor:pointer}.card a{font-weight:600;color:#1e40af;text-decoration:none}.card p{margin:6px 0 0;color:#667}</style></head>
+<body><h1>Products</h1>
+<div class="grid" id="list"></div>
+<script>
+const js = location.search.includes('js=1'); // ?js=1: cards open by JavaScript click, no links
+const list = document.getElementById('list');
+for (let n = 1; n <= 4; n++) {
+  const name = ['Desk Lamp', 'Office Chair', 'Bookshelf', 'Monitor Arm'][n - 1];
+  list.insertAdjacentHTML('beforeend', js
+    ? `<div class="card" data-id="${n}"><span class="title">${name}</span><p>SKU-${100 + n}</p></div>`
+    : `<div class="card"><a class="title" href="product.html?id=${n}">${name}</a><p>SKU-${100 + n}</p></div>`);
+}
+if (js) list.addEventListener('click', (e) => { const c = e.target.closest('.card'); if (c) location.href = 'product.html?id=' + c.dataset.id; });
+</script></body></html>

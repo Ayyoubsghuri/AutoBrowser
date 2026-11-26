@@ -17,7 +17,7 @@ export function stepTitle(s: Step): string {
     case 'extract_table': return `Extract table → ${s.name || 'table'}`;
     case 'extract_text': return `Extract text → ${s.name || 'text'}`;
     case 'login': return 'Log in with saved account';
-    case 'loop': return `Repeat (${s.loop?.over || 'count'})`;
+    case 'loop': return s.loop?.over === 'items' ? `For each item${s.loop.from ? ` in “${s.loop.from}”` : ' in the list'}` : `Repeat (${s.loop?.over || 'count'})`;
     case 'if': return 'If…';
     case 'ai': return `AI: ${s.instruction || s.tip || ''}`;
     default: return s.type;
@@ -67,4 +67,44 @@ export function matchColumn(value: string | undefined, row: Record<string, unkno
   }
   const hit = flat.find(([, v]) => norm(v) === norm(value));
   return hit ? `{{row.${hit[0]}}}` : null;
+}
+
+/**
+ * Turn "click one item of a list, then do things on its page" into a loop over every item.
+ * Steps after the click become the loop body; the click itself becomes "open each item".
+ */
+export function repeatForItems(steps: Step[], clickIndex: number): Step[] {
+  const click = steps[clickIndex];
+  const ctxList = click.in_list;
+  if (!ctxList) return steps;
+  // a Pick-table step on the same list page gives the item data + links
+  const table = [...steps.slice(0, clickIndex)].reverse().find((s) => s.type === 'extract_table' && (!s.url || s.url === ctxList.list_url));
+  const from = table ? table.name || 'table' : undefined;
+  const loop: Step = {
+    id: uid(),
+    type: 'loop',
+    name: `${from || 'items'}_details`,
+    loop: {
+      over: 'items',
+      from,
+      open: ctxList.link ? 'link' : 'click',
+      list_url: ctxList.list_url,
+      row_selector: ctxList.row_selector,
+      click_target: { selectors: [
+        { kind: 'css', value: `{{row}} ${ctxList.inner}`.trim() },
+        { kind: 'css', value: '{{row}} a[href]' },
+      ] },
+      max: 500,
+    },
+    steps: steps.slice(clickIndex + 1),
+    origin_click: click,
+    ts: click.ts,
+  };
+  return [...steps.slice(0, clickIndex), loop];
+}
+
+export function undoRepeat(steps: Step[], loopIndex: number): Step[] {
+  const loop = steps[loopIndex];
+  if (!loop.origin_click) return steps;
+  return [...steps.slice(0, loopIndex), loop.origin_click, ...(loop.steps || []), ...steps.slice(loopIndex + 1)];
 }

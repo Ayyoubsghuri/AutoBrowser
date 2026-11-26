@@ -324,6 +324,15 @@ Input: the steps a user recorded by clicking around a website, in order. Each st
   no selector can express it, an `ai` step with a precise `instruction`.
 - Prefer deterministic steps over `ai` steps: they are free, fast and need no API key at run time.
 - Keep every recorded selector candidate you can; put the most stable first (testid, id, aria, name, then css, then text).
+- Details on each item's own page (e.g. the price is only on the product page): Pick-table the list
+  (`extract_table`, named e.g. "products"; its rows include `_link`), then ONE `loop` step
+  {"over":"items","from":"products","open":"link"} whose child steps run on each item's page
+  (extract_text there; results merge with the item's list columns). Without links use
+  {"over":"items","open":"click","list_url":<list page url>,"row_selector":<css of each row>,
+  "click_target":{"selectors":[{"kind":"css","value":"{{row}} a"}]}}. Inside, {{item.<column>}} is the
+  current item. If the list has several pages, put the extract_table inside an until_missing loop
+  first (rows accumulate), then the items loop after it. A recorded `loop` with over "items" is
+  already correct: keep it.
 - Recognise login sequences (username + password + submit) and replace them with ONE `login` step
   whose target selectors map: {"username": [...], "password": [...], "submit": [...], "totp": [...]} in `value` as JSON,
   plus `condition` {"exists": <username field css>} so it is skipped when the session is already logged in.
